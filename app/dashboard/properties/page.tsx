@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
@@ -39,9 +39,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
+import { GoogleMapsLocation } from '@/components/ui/google-maps-location'
+import { ActivityLogger } from '@/lib/utils/activity-logger'
 
 const propertySchema = z.object({
   code: z.string().optional(),
+  old_code: z.string().optional(),
   title_ar: z.string().min(1, 'Title (Arabic) is required'),
   title_en: z.string().min(1, 'Title (English) is required'),
   description_ar: z.string().optional(),
@@ -51,14 +55,25 @@ const propertySchema = z.object({
   governorate_id: z.string().uuid().optional().nullable(),
   area_id: z.string().uuid().optional().nullable(),
   street_id: z.string().uuid().optional().nullable(),
+  location_text: z.string().optional(),
+  latitude: z.number().optional().nullable(),
+  longitude: z.number().optional().nullable(),
+  owner_id: z.string().uuid().optional().nullable(),
+  section_id: z.string().uuid().optional().nullable(),
   property_type_id: z.string().uuid().optional().nullable(),
   price: z.number().optional().nullable(),
+  payment_method_id: z.string().uuid().optional().nullable(),
   size: z.number().optional().nullable(),
   baths: z.number().int().optional().nullable(),
   floor_no: z.number().int().optional().nullable(),
+  view_type_id: z.string().uuid().optional().nullable(),
+  finishing_type_id: z.string().uuid().optional().nullable(),
+  phone_number: z.string().optional(),
   status: z.enum(['pending', 'active', 'inactive', 'rejected', 'deleted', 'expired', 'rented', 'sold']),
   is_featured: z.boolean().default(false),
-  phone_number: z.string().optional(),
+  is_rented: z.boolean().default(false),
+  is_sold: z.boolean().default(false),
+  expired_at: z.string().optional().nullable(),
 })
 
 type PropertyForm = z.infer<typeof propertySchema>
@@ -91,17 +106,63 @@ async function getProperties() {
   return data as Property[]
 }
 
+async function getPropertyFacilities(propertyId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('property_property_facilities')
+    .select('facility_id')
+    .eq('property_id', propertyId)
+
+  if (error) throw error
+  return data.map((item: any) => item.facility_id)
+}
+
+async function getPropertyServices(propertyId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('property_property_services')
+    .select('service_id')
+    .eq('property_id', propertyId)
+
+  if (error) throw error
+  return data.map((item: any) => item.service_id)
+}
+
 async function getMasterData() {
   const supabase = createClient()
   
-  const [governorates, propertyTypes] = await Promise.all([
+  const [
+    governorates,
+    propertyTypes,
+    propertyOwners,
+    sections,
+    paymentMethods,
+    viewTypes,
+    finishingTypes,
+    facilities,
+    services,
+  ] = await Promise.all([
     supabase.from('governorates').select('id, name_ar, name_en').eq('status', 'active').order('order_index'),
     supabase.from('property_types').select('id, name_ar, name_en').eq('status', 'active'),
+    supabase.from('property_owners').select('id, name, email').eq('status', 'active').order('name'),
+    supabase.from('sections').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
+    supabase.from('payment_methods').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
+    supabase.from('property_view_types').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
+    supabase.from('property_finishing_types').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
+    supabase.from('property_facilities').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
+    supabase.from('property_services').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
   ])
 
   return {
     governorates: governorates.data || [],
     propertyTypes: propertyTypes.data || [],
+    propertyOwners: propertyOwners.data || [],
+    sections: sections.data || [],
+    paymentMethods: paymentMethods.data || [],
+    viewTypes: viewTypes.data || [],
+    finishingTypes: finishingTypes.data || [],
+    facilities: facilities.data || [],
+    services: services.data || [],
   }
 }
 
@@ -129,35 +190,143 @@ async function getStreets(areaId: string) {
   return data || []
 }
 
-async function createProperty(propertyData: PropertyForm) {
+async function getNextPropertyCode(): Promise<string> {
+  const supabase = createClient()
+  // Get all properties with codes
+  const { data, error } = await supabase
+    .from('properties')
+    .select('code')
+    .not('code', 'is', null)
+
+  if (error) throw error
+
+  if (!data || data.length === 0) {
+    // No properties exist, start from 1
+    return '1'
+  }
+
+  // Find the highest numeric code
+  const codes = data
+    .map((p) => p.code)
+    .filter((code) => code && /^\d+$/.test(code)) // Only numeric codes
+    .map((code) => parseInt(code, 10))
+    .filter((num) => !isNaN(num))
+
+  if (codes.length === 0) {
+    // No numeric codes found, start from 1
+    return '1'
+  }
+
+  const maxCode = Math.max(...codes)
+  return String(maxCode + 1)
+}
+
+async function createProperty(propertyData: PropertyForm & { facilityIds?: string[], serviceIds?: string[] }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   
+  // Always auto-generate code
+  const code = await getNextPropertyCode()
+  
+  // Extract facilityIds and serviceIds (not database columns)
+  const { facilityIds, serviceIds, ...dbPropertyData } = propertyData
+  
+  // Clean up the data - convert empty strings to null and handle undefined
+  const cleanData: any = {
+    code: code,
+    title_ar: dbPropertyData.title_ar,
+    title_en: dbPropertyData.title_en,
+    description_ar: dbPropertyData.description_ar || null,
+    description_en: dbPropertyData.description_en || null,
+    address_ar: dbPropertyData.address_ar || null,
+    address_en: dbPropertyData.address_en || null,
+    location_text: dbPropertyData.location_text || null,
+    phone_number: dbPropertyData.phone_number || null,
+    governorate_id: dbPropertyData.governorate_id || null,
+    area_id: dbPropertyData.area_id || null,
+    street_id: dbPropertyData.street_id || null,
+    property_type_id: dbPropertyData.property_type_id || null,
+    owner_id: dbPropertyData.owner_id || null,
+    section_id: dbPropertyData.section_id || null,
+    payment_method_id: dbPropertyData.payment_method_id || null,
+    view_type_id: dbPropertyData.view_type_id || null,
+    finishing_type_id: dbPropertyData.finishing_type_id || null,
+    price: dbPropertyData.price ?? null,
+    size: dbPropertyData.size ?? null,
+    baths: dbPropertyData.baths ?? null,
+    floor_no: dbPropertyData.floor_no ?? null,
+    latitude: dbPropertyData.latitude ?? null,
+    longitude: dbPropertyData.longitude ?? null,
+    status: dbPropertyData.status || 'pending',
+    is_featured: dbPropertyData.is_featured ?? false,
+    is_rented: dbPropertyData.is_rented ?? false,
+    is_sold: dbPropertyData.is_sold ?? false,
+    expired_at: dbPropertyData.expired_at || null,
+    created_by: user?.id || null,
+  }
+  
   const { data, error } = await supabase
     .from('properties')
-    .insert({
-      ...propertyData,
-      governorate_id: propertyData.governorate_id || null,
-      area_id: propertyData.area_id || null,
-      street_id: propertyData.street_id || null,
-      property_type_id: propertyData.property_type_id || null,
-      created_by: user?.id || null,
-    })
+    .insert(cleanData)
     .select()
     .single()
 
-  if (error) throw error
+  if (error) {
+    console.error('Property creation error:', error)
+    throw error
+  }
+
+  // Insert facilities
+  if (facilityIds && facilityIds.length > 0) {
+    const facilityInserts = facilityIds.map(facilityId => ({
+      property_id: data.id,
+      facility_id: facilityId,
+    }))
+    const { error: facilitiesError } = await supabase
+      .from('property_property_facilities')
+      .insert(facilityInserts)
+    
+    if (facilitiesError) {
+      console.error('Facilities insert error:', facilitiesError)
+      throw facilitiesError
+    }
+  }
+
+  // Insert services
+  if (serviceIds && serviceIds.length > 0) {
+    const serviceInserts = serviceIds.map(serviceId => ({
+      property_id: data.id,
+      service_id: serviceId,
+    }))
+    const { error: servicesError } = await supabase
+      .from('property_property_services')
+      .insert(serviceInserts)
+    
+    if (servicesError) {
+      console.error('Services insert error:', servicesError)
+      throw servicesError
+    }
+  }
+
   return data
 }
 
-async function updateProperty(id: string, propertyData: Partial<PropertyForm>) {
+async function updateProperty(id: string, propertyData: Partial<PropertyForm> & { facilityIds?: string[], serviceIds?: string[] }) {
   const supabase = createClient()
+  // Remove code from update data - code should never be changed
+  const { code, old_code, facilityIds, serviceIds, ...updateDataWithoutCode } = propertyData
   const updateData = {
-    ...propertyData,
+    ...updateDataWithoutCode,
     governorate_id: propertyData.governorate_id || null,
     area_id: propertyData.area_id || null,
     street_id: propertyData.street_id || null,
     property_type_id: propertyData.property_type_id || null,
+    owner_id: propertyData.owner_id || null,
+    section_id: propertyData.section_id || null,
+    payment_method_id: propertyData.payment_method_id || null,
+    view_type_id: propertyData.view_type_id || null,
+    finishing_type_id: propertyData.finishing_type_id || null,
+    expired_at: propertyData.expired_at || null,
   }
   const { data, error } = await supabase
     .from('properties')
@@ -167,6 +336,55 @@ async function updateProperty(id: string, propertyData: Partial<PropertyForm>) {
     .single()
 
   if (error) throw error
+
+  // Update facilities - delete old and insert new
+  if (facilityIds !== undefined) {
+    // Delete existing facilities
+    const { error: deleteFacilitiesError } = await supabase
+      .from('property_property_facilities')
+      .delete()
+      .eq('property_id', id)
+    
+    if (deleteFacilitiesError) throw deleteFacilitiesError
+
+    // Insert new facilities
+    if (facilityIds.length > 0) {
+      const facilityInserts = facilityIds.map(facilityId => ({
+        property_id: id,
+        facility_id: facilityId,
+      }))
+      const { error: facilitiesError } = await supabase
+        .from('property_property_facilities')
+        .insert(facilityInserts)
+      
+      if (facilitiesError) throw facilitiesError
+    }
+  }
+
+  // Update services - delete old and insert new
+  if (serviceIds !== undefined) {
+    // Delete existing services
+    const { error: deleteServicesError } = await supabase
+      .from('property_property_services')
+      .delete()
+      .eq('property_id', id)
+    
+    if (deleteServicesError) throw deleteServicesError
+
+    // Insert new services
+    if (serviceIds.length > 0) {
+      const serviceInserts = serviceIds.map(serviceId => ({
+        property_id: id,
+        service_id: serviceId,
+      }))
+      const { error: servicesError } = await supabase
+        .from('property_property_services')
+        .insert(serviceInserts)
+      
+      if (servicesError) throw servicesError
+    }
+  }
+
   return data
 }
 
@@ -188,8 +406,12 @@ export default function PropertiesPage() {
   const [editingProperty, setEditingProperty] = useState<Property | null>(null)
   const [selectedGovernorate, setSelectedGovernorate] = useState<string>('none')
   const [selectedArea, setSelectedArea] = useState<string>('none')
+  const [selectedStreet, setSelectedStreet] = useState<string>('none')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null)
+  const [nextCode, setNextCode] = useState<string>('')
+  const [selectedFacilities, setSelectedFacilities] = useState<string[]>([])
+  const [selectedServices, setSelectedServices] = useState<string[]>([])
 
   const { data: properties, isLoading } = useQuery({
     queryKey: ['properties'],
@@ -213,6 +435,29 @@ export default function PropertiesPage() {
     enabled: selectedArea !== 'none',
   })
 
+  // Fetch next code when dialog opens for new property
+  const { data: nextCodeData, refetch: refetchNextCode } = useQuery({
+    queryKey: ['next-property-code'],
+    queryFn: getNextPropertyCode,
+    enabled: isDialogOpen && !editingProperty,
+  })
+
+  // Update nextCode state when data is fetched
+  useEffect(() => {
+    if (nextCodeData && !editingProperty) {
+      setNextCode(nextCodeData)
+    } else if (editingProperty) {
+      setNextCode('')
+    }
+  }, [nextCodeData, editingProperty])
+
+  // Refetch next code when dialog opens for new property
+  useEffect(() => {
+    if (isDialogOpen && !editingProperty) {
+      refetchNextCode()
+    }
+  }, [isDialogOpen, editingProperty, refetchNextCode])
+
   const createMutation = useMutation({
     mutationFn: createProperty,
     onSuccess: async (data: any) => {
@@ -221,6 +466,9 @@ export default function PropertiesPage() {
       reset()
       setSelectedGovernorate('none')
       setSelectedArea('none')
+      setSelectedStreet('none')
+      setSelectedFacilities([])
+      setSelectedServices([])
       // Log activity
       if (data?.id) {
         await ActivityLogger.create('property', data.id, data.title_en || data.title_ar || data.code || 'Untitled Property')
@@ -229,7 +477,7 @@ export default function PropertiesPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<PropertyForm> }) =>
+    mutationFn: ({ id, data }: { id: string; data: Partial<PropertyForm> & { facilityIds?: string[], serviceIds?: string[] } }) =>
       updateProperty(id, data),
     onSuccess: async (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
@@ -239,6 +487,9 @@ export default function PropertiesPage() {
       reset()
       setSelectedGovernorate('none')
       setSelectedArea('none')
+      setSelectedStreet('none')
+      setSelectedFacilities([])
+      setSelectedServices([])
       // Log activity
       if (previousProperty && data?.id) {
         await ActivityLogger.update(
@@ -282,16 +533,30 @@ export default function PropertiesPage() {
     defaultValues: {
       status: 'pending',
       is_featured: false,
+      is_rented: false,
+      is_sold: false,
     },
   })
 
   const isFeatured = watch('is_featured')
+  const isRented = watch('is_rented')
+  const isSold = watch('is_sold')
 
   const onSubmit = (data: PropertyForm) => {
     const submitData = {
       ...data,
-      governorate_id: selectedGovernorate === 'none' ? undefined : selectedGovernorate,
-      area_id: selectedArea === 'none' ? undefined : selectedArea,
+      governorate_id: selectedGovernorate === 'none' ? null : selectedGovernorate,
+      area_id: selectedArea === 'none' ? null : selectedArea,
+      street_id: selectedStreet === 'none' ? null : selectedStreet,
+      owner_id: data.owner_id || null,
+      section_id: data.section_id || null,
+      payment_method_id: data.payment_method_id || null,
+      view_type_id: data.view_type_id || null,
+      finishing_type_id: data.finishing_type_id || null,
+      property_type_id: data.property_type_id || null,
+      expired_at: data.expired_at || null,
+      facilityIds: selectedFacilities,
+      serviceIds: selectedServices,
     }
     if (editingProperty) {
       updateMutation.mutate({ id: editingProperty.id, data: submitData })
@@ -300,21 +565,52 @@ export default function PropertiesPage() {
     }
   }
 
-  const handleEdit = (property: Property) => {
+  const handleEdit = async (property: any) => {
     setEditingProperty(property)
-    setValue('code', property.code || '')
+    // Code is read-only, so we don't set it in the form
     setValue('title_ar', property.title_ar)
+    
+    // Load existing facilities and services
+    try {
+      const [facilityIds, serviceIds] = await Promise.all([
+        getPropertyFacilities(property.id),
+        getPropertyServices(property.id),
+      ])
+      setSelectedFacilities(facilityIds)
+      setSelectedServices(serviceIds)
+    } catch (error) {
+      console.error('Error loading property facilities/services:', error)
+      setSelectedFacilities([])
+      setSelectedServices([])
+    }
     setValue('title_en', property.title_en)
     setValue('description_ar', property.description_ar || '')
     setValue('description_en', property.description_en || '')
+    setValue('address_ar', property.address_ar || '')
+    setValue('address_en', property.address_en || '')
+    setValue('location_text', property.location_text || '')
+    setValue('latitude', property.latitude || undefined)
+    setValue('longitude', property.longitude || undefined)
     setValue('price', property.price || undefined)
     setValue('size', property.size || undefined)
+    setValue('baths', property.baths || undefined)
+    setValue('floor_no', property.floor_no || undefined)
+    setValue('phone_number', property.phone_number || '')
     setValue('status', property.status as any)
-    setValue('is_featured', property.is_featured)
+    setValue('is_featured', property.is_featured || false)
+    setValue('is_rented', property.is_rented || false)
+    setValue('is_sold', property.is_sold || false)
     setValue('property_type_id', property.property_type_id || undefined)
+    setValue('owner_id', property.owner_id || undefined)
+    setValue('section_id', property.section_id || undefined)
+    setValue('payment_method_id', property.payment_method_id || undefined)
+    setValue('view_type_id', property.view_type_id || undefined)
+    setValue('finishing_type_id', property.finishing_type_id || undefined)
+    setValue('expired_at', property.expired_at ? new Date(property.expired_at).toISOString().split('T')[0] : undefined)
     setValue('governorate_id', property.governorate_id || undefined)
     setSelectedGovernorate(property.governorate_id || 'none')
     setSelectedArea(property.area_id || 'none')
+    setSelectedStreet(property.street_id || 'none')
     setIsDialogOpen(true)
   }
 
@@ -386,6 +682,9 @@ export default function PropertiesPage() {
             reset()
             setSelectedGovernorate('none')
             setSelectedArea('none')
+            setSelectedStreet('none')
+            setSelectedFacilities([])
+            setSelectedServices([])
             setIsDialogOpen(true)
           }}>
             <Plus className="mr-2 h-4 w-4" />
@@ -444,12 +743,21 @@ export default function PropertiesPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="code">{t('properties.code')}</Label>
+                <Label htmlFor="code">
+                  {t('properties.code')} <span className="text-xs text-muted-foreground">(Auto-generated)</span>
+                </Label>
                 <Input
                   id="code"
-                  {...register('code')}
-                  disabled={createMutation.isPending || updateMutation.isPending}
+                  value={editingProperty?.code || (nextCode || 'Calculating...')}
+                  disabled={true}
+                  className="bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 text-blue-900 dark:text-blue-100 font-semibold cursor-not-allowed"
+                  readOnly
                 />
+                <p className="text-xs text-muted-foreground">
+                  {editingProperty 
+                    ? 'Code cannot be changed after creation' 
+                    : `Next code that will be assigned: ${nextCode || 'Calculating...'}`}
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -467,6 +775,7 @@ export default function PropertiesPage() {
                     <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="inactive">Inactive</SelectItem>
                     <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="deleted">Deleted</SelectItem>
                     <SelectItem value="expired">Expired</SelectItem>
                     <SelectItem value="rented">Rented</SelectItem>
                     <SelectItem value="sold">Sold</SelectItem>
@@ -523,78 +832,231 @@ export default function PropertiesPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="address_ar">Address (Arabic)</Label>
+                <Input
+                  id="address_ar"
+                  {...register('address_ar')}
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="address_en">Address (English)</Label>
+                <Input
+                  id="address_en"
+                  {...register('address_en')}
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="governorate_id">{t('properties.governorate')}</Label>
-                <Select
+                <SearchableSelect
                   value={selectedGovernorate}
                   onValueChange={(value) => {
                     setSelectedGovernorate(value)
                     setSelectedArea('none')
-                    setValue('governorate_id', value === 'none' ? undefined : value)
-                    setValue('area_id', undefined)
-                    setValue('street_id', undefined)
+                    setSelectedStreet('none')
+                    setValue('governorate_id', value === 'none' ? null : value)
+                    setValue('area_id', null)
+                    setValue('street_id', null)
                   }}
+                  placeholder="Select governorate"
+                  searchPlaceholder="Search governorates..."
                   disabled={createMutation.isPending || updateMutation.isPending}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select governorate" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No Governorate</SelectItem>
-                    {masterData?.governorates.map((gov: any) => (
-                      <SelectItem key={gov.id} value={gov.id}>
-                        {gov.name_en} / {gov.name_ar}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={[
+                    { value: 'none', label: 'No Governorate' },
+                    ...(masterData?.governorates.map((gov: any) => ({
+                      value: gov.id,
+                      label: `${gov.name_en} / ${gov.name_ar}`,
+                    })) || []),
+                  ]}
+                />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="area_id">{t('properties.area')}</Label>
-                <Select
+                <SearchableSelect
                   value={selectedArea}
                   onValueChange={(value) => {
                     setSelectedArea(value)
-                    setValue('area_id', value === 'none' ? undefined : value)
-                    setValue('street_id', undefined)
+                    setSelectedStreet('none')
+                    setValue('area_id', value === 'none' ? null : value)
+                    setValue('street_id', null)
                   }}
+                  placeholder="Select area"
+                  searchPlaceholder="Search areas..."
                   disabled={selectedGovernorate === 'none' || createMutation.isPending || updateMutation.isPending}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select area" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No Area</SelectItem>
-                    {areas?.map((area: any) => (
-                      <SelectItem key={area.id} value={area.id}>
-                        {area.name_en} / {area.name_ar}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={[
+                    { value: 'none', label: 'No Area' },
+                    ...(areas?.map((area: any) => ({
+                      value: area.id,
+                      label: `${area.name_en} / ${area.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="street_id">Street</Label>
+                <SearchableSelect
+                  value={selectedStreet}
+                  onValueChange={(value) => {
+                    setSelectedStreet(value)
+                    setValue('street_id', value === 'none' ? null : value)
+                  }}
+                  placeholder="Select street"
+                  searchPlaceholder="Search streets..."
+                  disabled={selectedArea === 'none' || createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No Street' },
+                    ...(streets?.map((street: any) => ({
+                      value: street.id,
+                      label: `${street.name_en} / ${street.name_ar}`,
+                    })) || []),
+                  ]}
+                />
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="property_type_id">{t('properties.propertyType')}</Label>
-                <Select
-                  onValueChange={(value) => setValue('property_type_id', value === 'none' ? undefined : value)}
-                  defaultValue={editingProperty?.property_type_id || 'none'}
+                <SearchableSelect
+                  value={editingProperty?.property_type_id || 'none'}
+                  onValueChange={(value) => setValue('property_type_id', value === 'none' ? null : value)}
+                  placeholder="Select type"
+                  searchPlaceholder="Search property types..."
                   disabled={createMutation.isPending || updateMutation.isPending}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No Type</SelectItem>
-                    {masterData?.propertyTypes.map((type: any) => (
-                      <SelectItem key={type.id} value={type.id}>
-                        {type.name_en} / {type.name_ar}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={[
+                    { value: 'none', label: 'No Type' },
+                    ...(masterData?.propertyTypes.map((type: any) => ({
+                      value: type.id,
+                      label: `${type.name_en} / ${type.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="owner_id">Property Owner</Label>
+                <SearchableSelect
+                  value={editingProperty?.owner_id || 'none'}
+                  onValueChange={(value) => setValue('owner_id', value === 'none' ? null : value)}
+                  placeholder="Select owner"
+                  searchPlaceholder="Search owners..."
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No Owner' },
+                    ...(masterData?.propertyOwners.map((owner: any) => ({
+                      value: owner.id,
+                      label: `${owner.name}${owner.email ? ` (${owner.email})` : ''}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="section_id">Section</Label>
+                <SearchableSelect
+                  value={editingProperty?.section_id || 'none'}
+                  onValueChange={(value) => setValue('section_id', value === 'none' ? null : value)}
+                  placeholder="Select section"
+                  searchPlaceholder="Search sections..."
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No Section' },
+                    ...(masterData?.sections.map((section: any) => ({
+                      value: section.id,
+                      label: `${section.name_en} / ${section.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="payment_method_id">Payment Method</Label>
+                <SearchableSelect
+                  value={editingProperty?.payment_method_id || 'none'}
+                  onValueChange={(value) => setValue('payment_method_id', value === 'none' ? null : value)}
+                  placeholder="Select payment method"
+                  searchPlaceholder="Search payment methods..."
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No Payment Method' },
+                    ...(masterData?.paymentMethods.map((method: any) => ({
+                      value: method.id,
+                      label: `${method.name_en} / ${method.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="view_type_id">View Type</Label>
+                <SearchableSelect
+                  value={editingProperty?.view_type_id || 'none'}
+                  onValueChange={(value) => setValue('view_type_id', value === 'none' ? null : value)}
+                  placeholder="Select view type"
+                  searchPlaceholder="Search view types..."
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No View Type' },
+                    ...(masterData?.viewTypes.map((type: any) => ({
+                      value: type.id,
+                      label: `${type.name_en} / ${type.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="finishing_type_id">Finishing Type</Label>
+                <SearchableSelect
+                  value={editingProperty?.finishing_type_id || 'none'}
+                  onValueChange={(value) => setValue('finishing_type_id', value === 'none' ? null : value)}
+                  placeholder="Select finishing type"
+                  searchPlaceholder="Search finishing types..."
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                  options={[
+                    { value: 'none', label: 'No Finishing Type' },
+                    ...(masterData?.finishingTypes.map((type: any) => ({
+                      value: type.id,
+                      label: `${type.name_en} / ${type.name_ar}`,
+                    })) || []),
+                  ]}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <GoogleMapsLocation
+                locationText={watch('location_text') || ''}
+                latitude={watch('latitude')}
+                longitude={watch('longitude')}
+                onLocationChange={(locationText, lat, lng) => {
+                  setValue('location_text', locationText)
+                  setValue('latitude', lat)
+                  setValue('longitude', lng)
+                }}
+                disabled={createMutation.isPending || updateMutation.isPending}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="phone_number">Phone Number</Label>
+                <Input
+                  id="phone_number"
+                  {...register('phone_number')}
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                />
               </div>
             </div>
 
@@ -642,15 +1104,115 @@ export default function PropertiesPage() {
               </div>
             </div>
 
-            <div className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                id="is_featured"
-                checked={isFeatured}
-                onChange={(e) => setValue('is_featured', e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
-              />
-              <Label htmlFor="is_featured">{t('properties.isFeatured')}</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="expired_at">Expired At</Label>
+                <Input
+                  id="expired_at"
+                  type="date"
+                  {...register('expired_at')}
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-6">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="is_featured"
+                  checked={isFeatured}
+                  onChange={(e) => setValue('is_featured', e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="is_featured">{t('properties.isFeatured')}</Label>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="is_rented"
+                  checked={isRented}
+                  onChange={(e) => setValue('is_rented', e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="is_rented">Is Rented</Label>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="is_sold"
+                  checked={isSold}
+                  onChange={(e) => setValue('is_sold', e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="is_sold">Is Sold</Label>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <Label className="text-base font-semibold">Property Facilities</Label>
+                <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4">
+                  {masterData?.facilities && masterData.facilities.length > 0 ? (
+                    masterData.facilities.map((facility: any) => (
+                      <div key={facility.id} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          id={`facility-${facility.id}`}
+                          checked={selectedFacilities.includes(facility.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFacilities([...selectedFacilities, facility.id])
+                            } else {
+                              setSelectedFacilities(selectedFacilities.filter(id => id !== facility.id))
+                            }
+                          }}
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                          className="h-4 w-4 rounded border-gray-300"
+                        />
+                        <Label htmlFor={`facility-${facility.id}`} className="font-normal cursor-pointer">
+                          {facility.name_en} / {facility.name_ar}
+                        </Label>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No facilities available</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Label className="text-base font-semibold">Property Services</Label>
+                <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4">
+                  {masterData?.services && masterData.services.length > 0 ? (
+                    masterData.services.map((service: any) => (
+                      <div key={service.id} className="flex items-center space-x-2">
+                        <input
+                          type="checkbox"
+                          id={`service-${service.id}`}
+                          checked={selectedServices.includes(service.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedServices([...selectedServices, service.id])
+                            } else {
+                              setSelectedServices(selectedServices.filter(id => id !== service.id))
+                            }
+                          }}
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                          className="h-4 w-4 rounded border-gray-300"
+                        />
+                        <Label htmlFor={`service-${service.id}`} className="font-normal cursor-pointer">
+                          {service.name_en} / {service.name_ar}
+                        </Label>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No services available</p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <DialogFooter>
@@ -663,6 +1225,9 @@ export default function PropertiesPage() {
                   reset()
                   setSelectedGovernorate('none')
                   setSelectedArea('none')
+                  setSelectedStreet('none')
+                  setSelectedFacilities([])
+                  setSelectedServices([])
                 }}
               >
                 {t('common.cancel')}

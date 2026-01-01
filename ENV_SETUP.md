@@ -15,6 +15,14 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhY
 
 # App Configuration
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Google Maps API (for location autocomplete and map display)
+# Get your API key from: https://console.cloud.google.com/google/maps-apis
+# REQUIRED APIs to enable:
+# 1. Maps JavaScript API
+# 2. Places API
+# 3. Geocoding API (for reverse geocoding - converting coordinates to addresses)
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 ```
 
 ## Important Security Notes
