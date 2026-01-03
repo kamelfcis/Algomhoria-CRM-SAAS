@@ -41,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const categorySchema = z.object({
   title_ar: z.string().min(1, 'Title (Arabic) is required'),
@@ -326,6 +327,10 @@ export default function CategoriesPage() {
   const canCreate = profile?.role === 'admin'
   const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
   const canDelete = profile?.role === 'admin'
+
+  if (isLoading) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
 
   const columns = [
     {

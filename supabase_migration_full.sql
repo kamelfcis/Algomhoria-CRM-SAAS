@@ -637,28 +637,6 @@ CREATE INDEX IF NOT EXISTS idx_direct_leads_created_at ON direct_leads(created_a
 CREATE INDEX IF NOT EXISTS idx_direct_leads_phone_number ON direct_leads(phone_number);
 CREATE INDEX IF NOT EXISTS idx_direct_leads_email ON direct_leads(email);
 
-CREATE TABLE IF NOT EXISTS leads_assignments (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
-  direct_lead_id UUID REFERENCES direct_leads(id) ON DELETE CASCADE,
-  assigned_to UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'cancelled')),
-  notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  completed_at TIMESTAMPTZ,
-  CONSTRAINT check_lead_type CHECK (
-    (lead_id IS NOT NULL AND direct_lead_id IS NULL) OR
-    (lead_id IS NULL AND direct_lead_id IS NOT NULL)
-  )
-);
-
-CREATE INDEX IF NOT EXISTS idx_leads_assignments_lead_id ON leads_assignments(lead_id);
-CREATE INDEX IF NOT EXISTS idx_leads_assignments_direct_lead_id ON leads_assignments(direct_lead_id);
-CREATE INDEX IF NOT EXISTS idx_leads_assignments_assigned_to ON leads_assignments(assigned_to);
-CREATE INDEX IF NOT EXISTS idx_leads_assignments_status ON leads_assignments(status);
-CREATE INDEX IF NOT EXISTS idx_leads_assignments_created_at ON leads_assignments(created_at);
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
@@ -752,9 +730,6 @@ CREATE TRIGGER update_property_comments_updated_at BEFORE UPDATE ON property_com
 CREATE TRIGGER update_direct_leads_updated_at BEFORE UPDATE ON direct_leads
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_leads_assignments_updated_at BEFORE UPDATE ON leads_assignments
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE team_users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
@@ -785,7 +760,6 @@ ALTER TABLE property_bookings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE featured_areas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE property_comments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE direct_leads ENABLE ROW LEVEL SECURITY;
-ALTER TABLE leads_assignments ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "users_select_own" ON users FOR SELECT
 TO authenticated
@@ -1376,31 +1350,5 @@ USING (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role IN ('admin','mo
 WITH CHECK (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role IN ('admin','moderator')));
 
 CREATE POLICY "direct_leads_delete_admin" ON direct_leads FOR DELETE
-TO authenticated
-USING (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));
-
-CREATE POLICY "leads_assignments_select_own" ON leads_assignments FOR SELECT
-TO authenticated
-USING (assigned_to = auth.uid());
-
-CREATE POLICY "leads_assignments_select_all_admin" ON leads_assignments FOR SELECT
-TO authenticated
-USING (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));
-
-CREATE POLICY "leads_assignments_insert_sales" ON leads_assignments FOR INSERT
-TO authenticated
-WITH CHECK (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role IN ('admin','sales')));
-
-CREATE POLICY "leads_assignments_update_own" ON leads_assignments FOR UPDATE
-TO authenticated
-USING (assigned_to = auth.uid())
-WITH CHECK (assigned_to = auth.uid());
-
-CREATE POLICY "leads_assignments_update_all_admin" ON leads_assignments FOR UPDATE
-TO authenticated
-USING (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'))
-WITH CHECK (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));
-
-CREATE POLICY "leads_assignments_delete_admin" ON leads_assignments FOR DELETE
 TO authenticated
 USING (EXISTS(SELECT 1 FROM users WHERE id = auth.uid() AND role = 'admin'));

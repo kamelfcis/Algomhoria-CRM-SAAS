@@ -1,14 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useTranslations } from '@/hooks/use-translations'
 import { useLanguageStore } from '@/store/language-store'
 import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
-import { X, ChevronDown, ChevronRight, Newspaper } from 'lucide-react'
+import { X, ChevronDown, ChevronRight, ChevronLeft, Newspaper } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
@@ -20,7 +21,7 @@ import {
   Home,
   MessageSquare,
   UserCircle,
-  Image,
+  Image as ImageIcon,
   UsersRound,
   Mail,
   FolderKanban,
@@ -71,7 +72,7 @@ const navigation: NavigationItem[] = [
       {
         name: 'postGallery',
         href: '/dashboard/post-gallery',
-        icon: Image,
+        icon: ImageIcon,
       },
       {
         name: 'categories',
@@ -160,17 +161,23 @@ const navigation: NavigationItem[] = [
   {
     name: 'propertyImages',
     href: '/dashboard/property-images',
-    icon: Image,
+    icon: ImageIcon,
   },
   {
     name: 'leads',
-    href: '/dashboard/leads',
     icon: MessageSquare,
-  },
-  {
-    name: 'leadsAssignments',
-    href: '/dashboard/leads-assignments',
-    icon: MessageSquare,
+    children: [
+      {
+        name: 'leads',
+        href: '/dashboard/leads',
+        icon: MessageSquare,
+      },
+      {
+        name: 'directLeads',
+        href: '/dashboard/direct-leads',
+        icon: MessageSquare,
+      },
+    ],
   },
   {
     name: 'propertyOwners',
@@ -180,7 +187,7 @@ const navigation: NavigationItem[] = [
   {
     name: 'sliders',
     href: '/dashboard/sliders',
-    icon: Image,
+    icon: ImageIcon,
   },
   {
     name: 'teamUsers',
@@ -232,55 +239,78 @@ export function Sidebar() {
   const { profile } = useAuthStore()
   const { sidebarOpen, setSidebarOpen } = useUIStore()
   const [expandedMenus, setExpandedMenus] = useState<Set<string>>(new Set())
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return document.documentElement.classList.contains('dark')
+  })
 
-  // Auto-expand submenus when navigating to a page within them
   useEffect(() => {
-    const menuItems = ['news', 'masterData', 'projectsData']
+    // Watch for class changes on document.documentElement
+    const observer = new MutationObserver(() => {
+      setIsDark(document.documentElement.classList.contains('dark'))
+    })
     
-    menuItems.forEach((menuName) => {
-      const menu = navigation.find((item) => item.name === menuName)
-      if (menu?.children) {
-        const childPaths = menu.children
-          .map((child) => child.href)
-          .filter((href): href is string => href !== undefined)
-        
-        const isOnMenuPage = childPaths.some((href) => pathname === href)
-        
-        if (isOnMenuPage) {
-          setExpandedMenus((prev) => {
-            const newSet = new Set(prev)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    })
+    
+    return () => observer.disconnect()
+  }, [])
+
+  // Filter navigation based on user role - memoized for performance
+  const filteredNavigation = useMemo(() => {
+    const filterNavigation = (items: NavigationItem[]): NavigationItem[] => {
+      return items
+        .map((item) => {
+          if (item.roles && profile) {
+            if (!item.roles.includes(profile.role)) {
+              return null
+            }
+          }
+          if (item.children) {
+            const filteredChildren = filterNavigation(item.children)
+            if (filteredChildren.length === 0) {
+              return null
+            }
+            return { ...item, children: filteredChildren }
+          }
+          return item
+        })
+        .filter((item): item is NavigationItem => item !== null)
+    }
+    return filterNavigation(navigation)
+  }, [profile])
+
+  // Auto-expand submenus when navigating to a page within them - optimized
+  useEffect(() => {
+    const menuItems = ['news', 'masterData', 'projectsData', 'leads']
+    
+    setExpandedMenus((prev) => {
+      const newSet = new Set(prev)
+      let hasChanges = false
+      
+      menuItems.forEach((menuName) => {
+        const menu = navigation.find((item) => item.name === menuName)
+        if (menu?.children) {
+          const childPaths = menu.children
+            .map((child) => child.href)
+            .filter((href): href is string => href !== undefined)
+          
+          const isOnMenuPage = childPaths.some((href) => pathname === href)
+          
+          if (isOnMenuPage && !newSet.has(menuName)) {
             newSet.add(menuName)
-            return newSet
-          })
+            hasChanges = true
+          }
         }
-      }
+      })
+      
+      return hasChanges ? newSet : prev
     })
   }, [pathname])
 
-  // Filter navigation based on user role
-  const filterNavigation = (items: NavigationItem[]): NavigationItem[] => {
-    return items
-      .map((item) => {
-        if (item.roles && profile) {
-          if (!item.roles.includes(profile.role)) {
-            return null
-          }
-        }
-        if (item.children) {
-          const filteredChildren = filterNavigation(item.children)
-          if (filteredChildren.length === 0) {
-            return null
-          }
-          return { ...item, children: filteredChildren }
-        }
-        return item
-      })
-      .filter((item): item is NavigationItem => item !== null)
-  }
-
-  const filteredNavigation = filterNavigation(navigation)
-
-  const toggleMenu = (menuName: string) => {
+  const toggleMenu = useCallback((menuName: string) => {
     setExpandedMenus((prev) => {
       const newSet = new Set(prev)
       if (newSet.has(menuName)) {
@@ -290,7 +320,7 @@ export function Sidebar() {
       }
       return newSet
     })
-  }
+  }, [])
 
   // Handle window resize - close sidebar on mobile when resizing to desktop
   useEffect(() => {
@@ -313,12 +343,12 @@ export function Sidebar() {
     }
   }, [pathname, setSidebarOpen])
 
-  const handleLinkClick = () => {
+  const handleLinkClick = useCallback(() => {
     // Close sidebar on mobile when link is clicked
     if (window.innerWidth < 1024) {
       setSidebarOpen(false)
     }
-  }
+  }, [])
 
   return (
     <>
@@ -334,22 +364,69 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed lg:static inset-y-0 z-50 flex h-full w-64 flex-col border-r bg-card transition-transform duration-300 ease-in-out',
-          language === 'ar' ? 'rtl' : 'ltr',
+          'fixed lg:static inset-y-0 z-50 flex h-full w-72 flex-col bg-card/80 backdrop-blur-xl transition-transform duration-300 ease-in-out',
+          language === 'ar' ? 'rtl border-l' : 'ltr border-r',
           sidebarOpen
             ? 'translate-x-0'
+            : language === 'ar'
+            ? 'translate-x-full lg:translate-x-0'
             : '-translate-x-full lg:translate-x-0'
         )}
         dir={language === 'ar' ? 'rtl' : 'ltr'}
+        style={{
+          borderColor: 'rgba(250, 199, 8, 0.2)',
+          background: isDark 
+            ? 'rgba(0, 0, 0, 0.9)' 
+            : 'rgba(255, 255, 255, 0.95)',
+          boxShadow: isDark
+            ? language === 'ar' 
+              ? '-2px 0 10px rgba(250, 199, 8, 0.2)'
+              : '2px 0 10px rgba(250, 199, 8, 0.2)'
+            : language === 'ar'
+            ? '-2px 0 10px rgba(250, 199, 8, 0.1)'
+            : '2px 0 10px rgba(250, 199, 8, 0.1)',
+        }}
       >
         {/* Header */}
-        <div className="flex h-16 items-center justify-between border-b px-6">
-          <h2 className="text-lg font-semibold">{t('common.appName')}</h2>
+        <div 
+          className="flex h-16 items-center justify-between border-b px-6 relative"
+          style={{
+            borderColor: 'rgba(250, 199, 8, 0.2)',
+          }}
+        >
+          <div className={cn(
+            "flex items-center gap-2",
+            language === 'ar' ? 'order-2' : 'order-1'
+          )}>
+            <div className="relative w-8 h-8">
+              <Image
+                src="/logo.png"
+                alt="ALGOMHORIA Logo"
+                fill
+                className="object-contain"
+                priority
+              />
+            </div>
+            <h2 
+              className="text-lg font-bold"
+              style={{
+                background: 'linear-gradient(135deg, #fac708, #d19c15, #af7818)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+              }}
+            >
+              {t('common.appName')}
+            </h2>
+          </div>
           {/* Close button for mobile */}
           <Button
             variant="ghost"
             size="icon"
-            className="lg:hidden h-8 w-8"
+            className={cn(
+              "lg:hidden h-8 w-8",
+              language === 'ar' ? 'order-1' : 'order-2'
+            )}
             onClick={() => setSidebarOpen(false)}
             aria-label="Close menu"
           >
@@ -371,40 +448,66 @@ export function Sidebar() {
                   <button
                     onClick={() => toggleMenu(item.name)}
                     className={cn(
-                      'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                      'flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
                       hasActiveChild
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                        ? 'bg-gradient-to-r from-gold-light/20 to-gold-dark/20 text-gold-dark dark:text-gold-light border border-gold-dark/30 dark:border-gold-light/30'
+                        : 'text-muted-foreground hover:bg-gold-light/10 hover:text-gold-dark dark:hover:text-gold-light'
                     )}
+                    style={hasActiveChild ? {
+                      boxShadow: '0 2px 8px rgba(250, 199, 8, 0.2)',
+                    } : {}}
                   >
                     <div className="flex items-center gap-3">
-                      <item.icon className="h-5 w-5 flex-shrink-0" />
-                      <span className="truncate">{t(`navigation.${item.name}`)}</span>
+                      <item.icon className={cn(
+                        "h-5 w-5 flex-shrink-0 transition-colors duration-200",
+                        hasActiveChild 
+                          ? "text-gold-dark dark:text-gold-light" 
+                          : "text-gold/70 dark:text-gold-light/70 hover:text-gold-dark dark:hover:text-gold-light"
+                      )} />
+                      <span className="flex-1 min-w-0 break-words">{t(`navigation.${item.name}`)}</span>
                     </div>
                     {isExpanded ? (
                       <ChevronDown className="h-4 w-4 flex-shrink-0" />
                     ) : (
-                      <ChevronRight className="h-4 w-4 flex-shrink-0" />
+                      language === 'ar' ? (
+                        <ChevronLeft className="h-4 w-4 flex-shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 flex-shrink-0" />
+                      )
                     )}
                   </button>
                   {isExpanded && (
-                    <div className="mt-1 ml-4 space-y-1 border-l pl-4">
+                    <div className={cn(
+                      "mt-1 space-y-1",
+                      language === 'ar' 
+                        ? "mr-4 border-r pr-4" 
+                        : "ml-4 border-l pl-4"
+                    )}>
                       {item.children.map((child) => {
                         const isActive = pathname === child.href
                         return (
                           <Link
                             key={child.name}
                             href={child.href!}
+                            prefetch={true}
                             onClick={handleLinkClick}
                             className={cn(
-                              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 whitespace-normal',
                               isActive
-                                ? 'bg-primary text-primary-foreground'
-                                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                                ? 'bg-gradient-to-r from-gold-light to-gold text-white border border-gold-dark/30'
+                                : 'text-muted-foreground hover:bg-gold-light/10 hover:text-gold-dark dark:hover:text-gold-light'
                             )}
+                            style={isActive ? {
+                              boxShadow: '0 2px 8px rgba(250, 199, 8, 0.3)',
+                            } : {}}
                           >
-                            <child.icon className="h-4 w-4 flex-shrink-0" />
-                            <span className="truncate">{t(`navigation.${child.name}`)}</span>
+                            <child.icon className={cn(
+                              "h-4 w-4 flex-shrink-0 transition-colors duration-200",
+                              isActive 
+                                ? "text-white" 
+                                : "text-gold/70 dark:text-gold-light/70 hover:text-gold-dark dark:hover:text-gold-light"
+                            )} />
+                            <span className="flex-1 min-w-0 break-words">{t(`navigation.${child.name}`)}</span>
                           </Link>
                         )
                       })}
@@ -419,16 +522,25 @@ export function Sidebar() {
               <Link
                 key={item.name}
                 href={item.href!}
+                prefetch={true}
                 onClick={handleLinkClick}
                 className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 whitespace-normal',
                   isActive
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                    ? 'bg-gradient-to-r from-gold-light to-gold text-white border border-gold-dark/30'
+                    : 'text-muted-foreground hover:bg-gold-light/10 hover:text-gold-dark dark:hover:text-gold-light'
                 )}
+                style={isActive ? {
+                  boxShadow: '0 2px 8px rgba(250, 199, 8, 0.3)',
+                } : {}}
               >
-                <item.icon className="h-5 w-5 flex-shrink-0" />
-                <span className="truncate">{t(`navigation.${item.name}`)}</span>
+                <item.icon className={cn(
+                  "h-5 w-5 flex-shrink-0 transition-colors duration-200",
+                  isActive 
+                    ? "text-white" 
+                    : "text-gold/70 dark:text-gold-light/70 hover:text-gold-dark dark:hover:text-gold-light"
+                )} />
+                <span className="flex-1 min-w-0 break-words">{t(`navigation.${item.name}`)}</span>
               </Link>
             )
           })}

@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ImageUpload } from '@/components/ui/image-upload'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const postSchema = z.object({
   title_ar: z.string().min(1, 'Title (Arabic) is required'),
@@ -307,6 +308,10 @@ export default function PostsPage() {
   const canCreate = profile?.role === 'admin' || profile?.role === 'sales'
   const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
   const canDelete = profile?.role === 'admin'
+
+  if (isLoading) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
 
   const columns = [
     {

@@ -7,6 +7,9 @@ import { useAuthStore } from '@/store/auth-store'
 import { Sidebar } from '@/components/layout/sidebar'
 import { Navbar } from '@/components/layout/navbar'
 import { useLanguageStore } from '@/store/language-store'
+import type { Database } from '@/lib/supabase/types'
+
+type UserProfile = Database['public']['Tables']['users']['Row']
 
 export default function DashboardLayout({
   children,
@@ -30,23 +33,46 @@ export default function DashboardLayout({
 
       if (!user || !profile) {
         // Fetch user profile
-        const { data: userProfile, error } = await supabase
+        let { data: userProfile, error } = await supabase
           .from('users')
           .select('*')
           .eq('email', currentUser.email!)
           .single()
 
+        // If user doesn't exist, automatically create it
         if (error || !userProfile) {
-          // User doesn't exist in users table - show error message
-          console.error('User profile not found:', error)
-          setProfileError(true)
-          setLoading(false)
-          return
+          console.warn('User profile not found, creating automatically...', error)
+          
+          // Create user profile automatically
+          const insertData: any = {
+            id: currentUser.id,
+            email: currentUser.email!,
+            name: currentUser.user_metadata?.name || currentUser.email!.split('@')[0],
+            role: 'sales', // Default role
+            status: 'active',
+          }
+
+          const { data: newUserProfile, error: createError } = await supabase
+            .from('users')
+            .insert(insertData)
+            .select()
+            .single()
+
+          if (createError || !newUserProfile) {
+            console.error('Failed to create user profile:', createError)
+            setProfileError(true)
+            setLoading(false)
+            return
+          }
+
+          userProfile = newUserProfile
         }
 
         if (userProfile) {
+          const profile = userProfile as UserProfile
+          
           // Check if user status is active - if not, log them out
-          if (userProfile.status !== 'active') {
+          if (profile.status !== 'active') {
             // User is inactive or suspended, sign them out
             await supabase.auth.signOut()
             router.push('/auth/login')
@@ -56,13 +82,13 @@ export default function DashboardLayout({
 
           setUser(currentUser)
           setProfile({
-            id: userProfile.id,
-            email: userProfile.email,
-            name: userProfile.name,
-            role: userProfile.role as any,
-            status: userProfile.status,
-            phone_number: userProfile.phone_number,
-            author_image_url: userProfile.author_image_url,
+            id: profile.id,
+            email: profile.email,
+            name: profile.name,
+            role: profile.role as any,
+            status: profile.status,
+            phone_number: profile.phone_number,
+            author_image_url: profile.author_image_url,
           })
           setProfileError(false)
         }
@@ -116,11 +142,71 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div 
+      className="flex h-screen overflow-hidden relative" 
+      dir={language === 'ar' ? 'rtl' : 'ltr'}
+    >
+      {/* Modern light mode background */}
+      <div 
+        className="fixed inset-0 -z-10 dark:hidden"
+        style={{
+          background: 'linear-gradient(135deg, #f8f9fa 0%, #ffffff 25%, #f5f7fa 50%, #ffffff 75%, #f8f9fa 100%)',
+          backgroundSize: '400% 400%',
+          animation: 'gradient 15s ease infinite',
+        }}
+      />
+      
+      {/* Subtle gold accent in light mode */}
+      <div 
+        className="fixed inset-0 -z-10 dark:hidden opacity-5"
+        style={{
+          background: 'radial-gradient(circle at 20% 50%, rgba(250, 199, 8, 0.3) 0%, transparent 50%), radial-gradient(circle at 80% 50%, rgba(209, 156, 21, 0.2) 0%, transparent 50%)',
+        }}
+      />
+      
+      {/* Futuristic dark mode background gradient */}
+      <div 
+        className="fixed inset-0 -z-10 hidden dark:block opacity-30"
+        style={{
+          background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 25%, #0f0f0f 50%, #1a1a1a 75%, #0a0a0a 100%)',
+          backgroundSize: '400% 400%',
+          animation: 'gradient 15s ease infinite',
+        }}
+      />
+      
+      {/* Gold gradient overlay for dark mode */}
+      <div 
+        className="fixed inset-0 -z-10 hidden dark:block opacity-20"
+        style={{
+          background: 'linear-gradient(135deg, #af7818 0%, #d19c15 50%, #fac708 100%)',
+          backgroundSize: '300% 300%',
+          animation: 'gradient 8s ease infinite',
+        }}
+      />
+      
+      {/* Animated particles background */}
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        {[...Array(15)].map((_, i) => (
+          <div
+            key={i}
+            className="absolute rounded-full opacity-5 dark:opacity-20"
+            style={{
+              width: `${Math.random() * 3 + 1}px`,
+              height: `${Math.random() * 3 + 1}px`,
+              left: `${Math.random() * 100}%`,
+              top: `${Math.random() * 100}%`,
+              background: `linear-gradient(135deg, #fac708, #d19c15)`,
+              animation: `float ${Math.random() * 4 + 4}s ease-in-out infinite`,
+              animationDelay: `${Math.random() * 2}s`,
+            }}
+          />
+        ))}
+      </div>
+
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden lg:ml-0">
         <Navbar />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 relative z-0">
           {children}
         </main>
       </div>

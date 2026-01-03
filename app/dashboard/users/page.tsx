@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
@@ -504,6 +505,10 @@ export default function UsersPage() {
   const canCreate = profile?.role === 'admin'
   const canEdit = profile?.role === 'admin'
   const canDelete = profile?.role === 'admin'
+
+  if (isLoading) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
 
   return (
     <div className="space-y-6">

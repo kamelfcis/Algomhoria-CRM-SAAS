@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
+import { useToast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Image as ImageIcon, Grid3x3, List, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
 import {
   Dialog,
@@ -42,6 +43,9 @@ import {
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { GoogleMapsLocation } from '@/components/ui/google-maps-location'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
+import { PropertyImageUpload } from '@/components/ui/property-image-upload'
+import { cn } from '@/lib/utils'
 
 const propertySchema = z.object({
   code: z.string().optional(),
@@ -93,6 +97,27 @@ interface Property {
   governorate_id: string | null
   area_id: string | null
   created_at: string
+}
+
+async function getPropertyImages(propertyId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('property_images')
+    .select('id, image_url, is_primary, order_index')
+    .eq('property_id', propertyId)
+    .order('order_index', { ascending: true })
+
+  if (error) {
+    console.error('Error fetching property images:', error)
+    return []
+  }
+
+  return (data || []).map((img: any) => ({
+    id: img.id,
+    url: img.image_url,
+    is_primary: img.is_primary || false,
+    order_index: img.order_index || 0,
+  }))
 }
 
 async function getProperties() {
@@ -398,8 +423,240 @@ async function deleteProperty(id: string) {
   if (error) throw error
 }
 
+// Component to show images count in table
+function PropertyImagesCell({ propertyId }: { propertyId: string }) {
+  const { data: images } = useQuery({
+    queryKey: ['property-images', propertyId],
+    queryFn: () => getPropertyImages(propertyId),
+  })
+
+  return (
+    <div className="flex items-center gap-2">
+      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+      <span className="text-sm">{images?.length || 0}</span>
+    </div>
+  )
+}
+
+// Property Card Component with Image Swipe
+interface PropertyCardProps {
+  property: Property
+  imageIndex: number
+  onImageIndexChange: (index: number) => void
+  imageCount: number
+  onEdit: () => void
+  onDelete: () => void
+  canEdit: boolean
+  canDelete: boolean
+}
+
+function PropertyCard({ property, imageIndex, onImageIndexChange, imageCount, onEdit, onDelete, canEdit, canDelete }: PropertyCardProps) {
+  const [images, setImages] = React.useState<Array<{ id: string; url: string }>>([])
+  const [touchStart, setTouchStart] = React.useState<number | null>(null)
+  const [touchEnd, setTouchEnd] = React.useState<number | null>(null)
+  const [isLoadingImages, setIsLoadingImages] = React.useState(false)
+
+  React.useEffect(() => {
+    const loadImages = async () => {
+      if (!property.id || imageCount === 0) {
+        setImages([])
+        return
+      }
+      
+      setIsLoadingImages(true)
+      try {
+        const imgs = await getPropertyImages(property.id)
+        setImages(imgs.map(img => ({ id: img.id, url: img.url })))
+        if (imgs.length > 0 && imageIndex >= imgs.length) {
+          onImageIndexChange(0)
+        }
+      } catch (error) {
+        console.error('Error loading images:', error)
+        setImages([])
+      } finally {
+        setIsLoadingImages(false)
+      }
+    }
+    
+    loadImages()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [property.id, imageCount])
+
+  const minSwipeDistance = 50
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchEnd(null)
+    setTouchStart(e.targetTouches[0].clientX)
+  }
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX)
+  }
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return
+    
+    const distance = touchStart - touchEnd
+    const isLeftSwipe = distance > minSwipeDistance
+    const isRightSwipe = distance < -minSwipeDistance
+
+    if (isLeftSwipe && images.length > 0) {
+      onImageIndexChange((imageIndex + 1) % images.length)
+    }
+    if (isRightSwipe && images.length > 0) {
+      onImageIndexChange((imageIndex - 1 + images.length) % images.length)
+    }
+  }
+
+  const goToPrevious = () => {
+    if (images.length > 0) {
+      onImageIndexChange((imageIndex - 1 + images.length) % images.length)
+    }
+  }
+
+  const goToNext = () => {
+    if (images.length > 0) {
+      onImageIndexChange((imageIndex + 1) % images.length)
+    }
+  }
+
+  const currentImage = images[imageIndex] || images[0] || null
+
+  return (
+    <Card className="relative backdrop-blur-sm border-2 border-gold-dark/20 dark:border-gold-light/20 bg-white/80 dark:bg-black/40 transition-all duration-300 hover:shadow-xl hover:scale-[1.02]">
+      {/* Image Section with Swipe */}
+      <div 
+        className="relative aspect-video w-full overflow-hidden bg-muted rounded-t-lg cursor-pointer"
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
+        {isLoadingImages ? (
+          <div className="w-full h-full flex items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          </div>
+        ) : currentImage ? (
+          <>
+            <img
+              src={currentImage.url}
+              alt={property.title_en || property.title_ar || 'Property'}
+              className="w-full h-full object-cover transition-transform duration-300"
+            />
+            {images.length > 1 && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    goToPrevious()
+                  }}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-all duration-200 hover:scale-110 z-10"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    goToNext()
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-all duration-200 hover:scale-110 z-10"
+                  aria-label="Next image"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1 z-10">
+                  {images.map((_, idx) => (
+                    <button
+                      key={idx}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onImageIndexChange(idx)
+                      }}
+                      className={cn(
+                        "h-2 rounded-full transition-all duration-200",
+                        idx === imageIndex ? "w-8 bg-white" : "w-2 bg-white/50 hover:bg-white/75"
+                      )}
+                      aria-label={`Go to image ${idx + 1}`}
+                    />
+                  ))}
+                </div>
+                <div className="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded z-10">
+                  {imageIndex + 1} / {images.length}
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-muted">
+            <ImageIcon className="h-12 w-12 text-muted-foreground" />
+          </div>
+        )}
+      </div>
+
+      {/* Property Info */}
+      <CardHeader className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <CardTitle className="text-lg truncate">{property.title_en || property.title_ar}</CardTitle>
+            {property.title_ar && property.title_en && (
+              <p className="text-sm text-muted-foreground truncate mt-1">{property.title_ar}</p>
+            )}
+            {property.code && (
+              <p className="text-xs text-muted-foreground mt-1">Code: {property.code}</p>
+            )}
+          </div>
+          <div className="flex gap-1 flex-shrink-0">
+            {canEdit && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onEdit}
+                className="h-8 w-8"
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+            )}
+            {canDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onDelete}
+                className="h-8 w-8 text-destructive hover:text-destructive"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-4 pt-0 space-y-3">
+        {property.price && (
+          <div className="text-lg font-semibold text-primary">
+            ${property.price.toLocaleString()}
+          </div>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="px-2 py-1 rounded text-xs font-medium bg-primary/10 text-primary capitalize">
+            {property.status}
+          </span>
+          {property.is_featured && (
+            <span className="px-2 py-1 rounded text-xs font-medium bg-gold/20 text-gold">
+              Featured
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Created: {new Date(property.created_at).toLocaleDateString()}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function PropertiesPage() {
   const t = useTranslations()
+  const { toast } = useToast()
   const { profile } = useAuthStore()
   const queryClient = useQueryClient()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
@@ -412,6 +669,9 @@ export default function PropertiesPage() {
   const [nextCode, setNextCode] = useState<string>('')
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [propertyImages, setPropertyImages] = useState<Array<{ id: string; url: string; is_primary?: boolean; order_index?: number }>>([])
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
+  const [propertyImageIndices, setPropertyImageIndices] = useState<{ [key: string]: number }>({})
 
   const { data: properties, isLoading } = useQuery({
     queryKey: ['properties'],
@@ -462,17 +722,16 @@ export default function PropertiesPage() {
     mutationFn: createProperty,
     onSuccess: async (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
-      setIsDialogOpen(false)
-      reset()
-      setSelectedGovernorate('none')
-      setSelectedArea('none')
-      setSelectedStreet('none')
-      setSelectedFacilities([])
-      setSelectedServices([])
       // Log activity
       if (data?.id) {
         await ActivityLogger.create('property', data.id, data.title_en || data.title_ar || data.code || 'Untitled Property')
+        // Set editing property to enable image upload
+        setEditingProperty({ ...data, title_ar: data.title_ar || '', title_en: data.title_en || '' } as Property)
+        // Load images (will be empty for new property)
+        const images = await getPropertyImages(data.id)
+        setPropertyImages(images)
       }
+      // Don't close dialog - allow user to upload images
     },
   })
 
@@ -481,16 +740,9 @@ export default function PropertiesPage() {
       updateProperty(id, data),
     onSuccess: async (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
-      setIsDialogOpen(false)
-      const previousProperty = editingProperty
-      setEditingProperty(null)
-      reset()
-      setSelectedGovernorate('none')
-      setSelectedArea('none')
-      setSelectedStreet('none')
-      setSelectedFacilities([])
-      setSelectedServices([])
+      queryClient.invalidateQueries({ queryKey: ['all-property-images'] })
       // Log activity
+      const previousProperty = editingProperty
       if (previousProperty && data?.id) {
         await ActivityLogger.update(
           'property',
@@ -500,6 +752,24 @@ export default function PropertiesPage() {
           data
         )
       }
+      // Close dialog and reset form
+      setIsDialogOpen(false)
+      setEditingProperty(null)
+      reset()
+      setPropertyImages([])
+      // Show success toast
+      toast({
+        title: t('common.success') || 'Success',
+        description: t('properties.updatedSuccessfully') || 'Property has been updated successfully',
+        variant: 'success',
+      })
+    },
+    onError: (error: any) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('properties.updateError') || 'Failed to update property. Please try again.',
+        variant: 'destructive',
+      })
     },
   })
 
@@ -612,6 +882,9 @@ export default function PropertiesPage() {
     setSelectedArea(property.area_id || 'none')
     setSelectedStreet(property.street_id || 'none')
     setIsDialogOpen(true)
+    // Load property images
+    const images = await getPropertyImages(property.id)
+    setPropertyImages(images)
   }
 
   const handleDelete = (property: Property) => {
@@ -629,11 +902,49 @@ export default function PropertiesPage() {
   const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
   const canDelete = profile?.role === 'admin'
 
+  // Query to get images count for all properties
+  const { data: allPropertyImages } = useQuery({
+    queryKey: ['all-property-images'],
+    queryFn: async () => {
+      if (!properties) return {}
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('property_images')
+        .select('property_id')
+      
+      if (!data) return {}
+      
+      const counts: { [key: string]: number } = {}
+      data.forEach((img: any) => {
+        counts[img.property_id] = (counts[img.property_id] || 0) + 1
+      })
+      return counts
+    },
+    enabled: !!properties && !isLoading,
+  })
+
+  if (isLoading || !masterData) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+
   const columns = [
     {
       key: 'code',
       header: t('properties.code'),
       render: (value: string | null) => value || '-',
+    },
+    {
+      key: 'images',
+      header: 'Images',
+      render: (value: any, row: Property) => {
+        const imageCount = allPropertyImages?.[row.id] || 0
+        return (
+          <div className="flex items-center gap-2">
+            <ImageIcon className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm">{imageCount}</span>
+          </div>
+        )
+      },
     },
     {
       key: 'title_en',
@@ -695,9 +1006,32 @@ export default function PropertiesPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t('properties.title')}</CardTitle>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <CardTitle>{t('properties.title')}</CardTitle>
+            <div className="flex items-center gap-1 border rounded-md transition-all duration-300 hover:shadow-md">
+              <Button
+                variant={viewMode === 'table' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('table')}
+                className="h-8 px-3 transition-all duration-200 hover:scale-110"
+                title={t('common.tableView') || 'Table View'}
+              >
+                <List className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={viewMode === 'cards' ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => setViewMode('cards')}
+                className="h-8 px-3 transition-all duration-200 hover:scale-110"
+                title={t('common.cardView') || 'Card View'}
+              >
+                <Grid3x3 className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
+          {viewMode === 'table' ? (
           <DataTable
             data={properties}
             columns={columns}
@@ -727,6 +1061,50 @@ export default function PropertiesPage() {
               </div>
             )}
           />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
+              {isLoading ? (
+                <>
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <Card key={i} className="animate-pulse">
+                      <CardContent className="p-4 space-y-3">
+                        <div className="h-48 bg-muted rounded" />
+                        <div className="h-4 bg-muted rounded w-3/4" />
+                        <div className="h-4 bg-muted rounded w-1/2" />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </>
+              ) : properties && properties.length > 0 ? (
+                properties.map((property: Property, index: number) => {
+                  const propertyImagesData = allPropertyImages?.[property.id] || {}
+                  const imagesForProperty: Array<{ id: string; url: string }> = []
+                  // We'll need to fetch images for each property - for now, use placeholder
+                  const currentImageIndex = propertyImageIndices[property.id] || 0
+                  
+                  return (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      imageIndex={currentImageIndex}
+                      onImageIndexChange={(newIndex) => {
+                        setPropertyImageIndices(prev => ({ ...prev, [property.id]: newIndex }))
+                      }}
+                      imageCount={allPropertyImages?.[property.id] || 0}
+                      onEdit={() => handleEdit(property)}
+                      onDelete={() => handleDelete(property)}
+                      canEdit={canEdit}
+                      canDelete={canDelete}
+                    />
+                  )
+                })
+              ) : (
+                <div className="col-span-full text-center py-12 text-muted-foreground">
+                  {t('common.noData') || 'No properties found'}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -925,7 +1303,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="property_type_id">{t('properties.propertyType')}</Label>
                 <SearchableSelect
-                  value={editingProperty?.property_type_id || 'none'}
+                  value={watch('property_type_id') || 'none'}
                   onValueChange={(value) => setValue('property_type_id', value === 'none' ? null : value)}
                   placeholder="Select type"
                   searchPlaceholder="Search property types..."
@@ -945,7 +1323,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="owner_id">Property Owner</Label>
                 <SearchableSelect
-                  value={editingProperty?.owner_id || 'none'}
+                  value={watch('owner_id') || 'none'}
                   onValueChange={(value) => setValue('owner_id', value === 'none' ? null : value)}
                   placeholder="Select owner"
                   searchPlaceholder="Search owners..."
@@ -963,7 +1341,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="section_id">Section</Label>
                 <SearchableSelect
-                  value={editingProperty?.section_id || 'none'}
+                  value={watch('section_id') || 'none'}
                   onValueChange={(value) => setValue('section_id', value === 'none' ? null : value)}
                   placeholder="Select section"
                   searchPlaceholder="Search sections..."
@@ -981,7 +1359,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="payment_method_id">Payment Method</Label>
                 <SearchableSelect
-                  value={editingProperty?.payment_method_id || 'none'}
+                  value={watch('payment_method_id') || 'none'}
                   onValueChange={(value) => setValue('payment_method_id', value === 'none' ? null : value)}
                   placeholder="Select payment method"
                   searchPlaceholder="Search payment methods..."
@@ -1001,7 +1379,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="view_type_id">View Type</Label>
                 <SearchableSelect
-                  value={editingProperty?.view_type_id || 'none'}
+                  value={watch('view_type_id') || 'none'}
                   onValueChange={(value) => setValue('view_type_id', value === 'none' ? null : value)}
                   placeholder="Select view type"
                   searchPlaceholder="Search view types..."
@@ -1019,7 +1397,7 @@ export default function PropertiesPage() {
               <div className="space-y-2">
                 <Label htmlFor="finishing_type_id">Finishing Type</Label>
                 <SearchableSelect
-                  value={editingProperty?.finishing_type_id || 'none'}
+                  value={watch('finishing_type_id') || 'none'}
                   onValueChange={(value) => setValue('finishing_type_id', value === 'none' ? null : value)}
                   placeholder="Select finishing type"
                   searchPlaceholder="Search finishing types..."
@@ -1215,6 +1593,18 @@ export default function PropertiesPage() {
               </div>
             </div>
 
+            {/* Property Images Upload */}
+            {editingProperty?.id && (
+              <div className="space-y-4">
+                <PropertyImageUpload
+                  propertyId={editingProperty.id}
+                  images={propertyImages}
+                  onImagesChange={setPropertyImages}
+                  disabled={createMutation.isPending || updateMutation.isPending}
+                />
+              </div>
+            )}
+
             <DialogFooter>
               <Button
                 type="button"
@@ -1228,6 +1618,7 @@ export default function PropertiesPage() {
                   setSelectedStreet('none')
                   setSelectedFacilities([])
                   setSelectedServices([])
+                  setPropertyImages([])
                 }}
               >
                 {t('common.cancel')}
