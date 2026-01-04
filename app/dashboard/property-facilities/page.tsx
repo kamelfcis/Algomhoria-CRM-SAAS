@@ -95,6 +95,18 @@ async function updateFacility(id: string, facilityData: Partial<FacilityForm>) {
   return data
 }
 
+async function checkFacilityHasProperties(facilityId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('property_property_facilities')
+    .select('property_id')
+    .eq('facility_id', facilityId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deleteFacility(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -262,9 +274,31 @@ export default function PropertyFacilitiesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (facilityToDelete) {
+  const confirmDelete = async () => {
+    if (!facilityToDelete) return
+
+    try {
+      const hasProperties = await checkFacilityHasProperties(facilityToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyFacilities.cannotDeleteHasProperties') || `This property facility cannot be deleted because it is used in one or more properties. Please remove it from all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setFacilityToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(facilityToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyFacilities.checkError') || 'Failed to verify if property facility is used in properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

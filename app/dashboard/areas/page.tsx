@@ -41,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 
 const areaSchema = z.object({
   governorate_id: z.string().uuid('Governorate is required'),
@@ -113,6 +114,42 @@ async function updateArea(id: string, areaData: Partial<AreaForm>) {
 
   if (error) throw error
   return data
+}
+
+async function checkAreaHasReferences(areaId: string) {
+  const supabase = createClient()
+  
+  // Check properties
+  const { data: properties, error: propertiesError } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('area_id', areaId)
+    .limit(1)
+
+  if (propertiesError) throw propertiesError
+  if (properties && properties.length > 0) return true
+
+  // Check streets
+  const { data: streets, error: streetsError } = await supabase
+    .from('streets')
+    .select('id')
+    .eq('area_id', areaId)
+    .limit(1)
+
+  if (streetsError) throw streetsError
+  if (streets && streets.length > 0) return true
+
+  // Check featured_areas
+  const { data: featuredAreas, error: featuredAreasError } = await supabase
+    .from('featured_areas')
+    .select('id')
+    .eq('area_id', areaId)
+    .limit(1)
+
+  if (featuredAreasError) throw featuredAreasError
+  if (featuredAreas && featuredAreas.length > 0) return true
+
+  return false
 }
 
 async function deleteArea(id: string) {
@@ -333,9 +370,31 @@ export default function AreasPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (areaToDelete) {
+  const confirmDelete = async () => {
+    if (!areaToDelete) return
+
+    try {
+      const hasReferences = await checkAreaHasReferences(areaToDelete.id)
+      
+      if (hasReferences) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('areas.cannotDeleteHasReferences') || `This area cannot be deleted because it has one or more properties, streets, or featured areas associated with it. Please remove or reassign all references before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setAreaToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(areaToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('areas.checkError') || 'Failed to verify if area has references. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 
@@ -480,19 +539,20 @@ export default function AreasPage() {
           <div className="flex gap-4">
             <div className="space-y-2">
               <Label>Governorate</Label>
-              <Select value={governorateFilter} onValueChange={setGovernorateFilter}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Governorates</SelectItem>
-                  {governorates?.map((gov: any) => (
-                    <SelectItem key={gov.id} value={gov.id}>
-                      {gov.name_ar} ({gov.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                value={governorateFilter}
+                onValueChange={setGovernorateFilter}
+                placeholder={t('areas.governorate') || 'Select Governorate'}
+                searchPlaceholder={t('common.search') || 'Search governorates...'}
+                className="w-48"
+                options={[
+                  { value: 'all', label: t('common.all') || 'All Governorates' },
+                  ...(governorates?.map((gov: any) => ({
+                    value: gov.id,
+                    label: `${gov.name_ar} (${gov.name_en})`
+                  })) || [])
+                ]}
+              />
             </div>
           </div>
         </CardContent>
@@ -552,22 +612,17 @@ export default function AreasPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="governorate_id">{t('areas.governorate') || 'Governorate'}</Label>
-              <Select
+              <SearchableSelect
                 value={selectedGovernorate}
                 onValueChange={(value) => setValue('governorate_id', value, { shouldValidate: true })}
+                placeholder={t('areas.selectGovernorate') || 'Select governorate'}
+                searchPlaceholder={t('common.search') || 'Search governorates...'}
                 disabled={createMutation.isPending || updateMutation.isPending}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder={t('areas.selectGovernorate') || 'Select governorate'} />
-                </SelectTrigger>
-                <SelectContent>
-                  {governorates?.map((gov: any) => (
-                    <SelectItem key={gov.id} value={gov.id}>
-                      {gov.name_ar} ({gov.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={governorates?.map((gov: any) => ({
+                  value: gov.id,
+                  label: `${gov.name_ar} (${gov.name_en})`
+                })) || []}
+              />
               {errors.governorate_id && (
                 <p className="text-sm text-destructive">{errors.governorate_id.message}</p>
               )}

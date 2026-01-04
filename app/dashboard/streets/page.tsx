@@ -41,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 
 const streetSchema = z.object({
   area_id: z.string().uuid('Area is required'),
@@ -117,6 +118,18 @@ async function updateStreet(id: string, streetData: Partial<StreetForm>) {
 
   if (error) throw error
   return data
+}
+
+async function checkStreetHasProperties(streetId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('street_id', streetId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
 }
 
 async function deleteStreet(id: string) {
@@ -269,6 +282,7 @@ export default function StreetsPage() {
     formState: { errors },
     reset,
     setValue,
+    watch,
   } = useForm<StreetForm>({
     resolver: zodResolver(streetSchema),
     defaultValues: {
@@ -276,6 +290,8 @@ export default function StreetsPage() {
       status: 'active',
     },
   })
+
+  const selectedArea = watch('area_id')
 
   const onSubmit = (data: StreetForm) => {
     if (editingStreet) {
@@ -302,9 +318,31 @@ export default function StreetsPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (streetToDelete) {
+  const confirmDelete = async () => {
+    if (!streetToDelete) return
+
+    try {
+      const hasProperties = await checkStreetHasProperties(streetToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('streets.cannotDeleteHasProperties') || `This street cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setStreetToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(streetToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('streets.checkError') || 'Failed to verify if street has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 
@@ -442,19 +480,20 @@ export default function StreetsPage() {
           <div className="flex gap-4">
             <div className="space-y-2">
               <Label>Area</Label>
-              <Select value={areaFilter} onValueChange={setAreaFilter}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Areas</SelectItem>
-                  {areas?.map((area: any) => (
-                    <SelectItem key={area.id} value={area.id}>
-                      {area.name_ar} ({area.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                value={areaFilter}
+                onValueChange={setAreaFilter}
+                placeholder={t('streets.area') || 'Select Area'}
+                searchPlaceholder={t('common.search') || 'Search areas...'}
+                className="w-48"
+                options={[
+                  { value: 'all', label: t('common.all') || 'All Areas' },
+                  ...(areas?.map((area: any) => ({
+                    value: area.id,
+                    label: `${area.name_ar} (${area.name_en})`
+                  })) || [])
+                ]}
+              />
             </div>
           </div>
         </CardContent>
@@ -510,22 +549,17 @@ export default function StreetsPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="area_id">{t('streets.area') || 'Area'}</Label>
-              <Select
-                onValueChange={(value) => setValue('area_id', value)}
-                defaultValue={editingStreet?.area_id}
+              <SearchableSelect
+                value={selectedArea}
+                onValueChange={(value) => setValue('area_id', value, { shouldValidate: true })}
+                placeholder={t('streets.area') || 'Select area'}
+                searchPlaceholder={t('common.search') || 'Search areas...'}
                 disabled={createMutation.isPending || updateMutation.isPending}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select area" />
-                </SelectTrigger>
-                <SelectContent>
-                  {areas?.map((area: any) => (
-                    <SelectItem key={area.id} value={area.id}>
-                      {area.name_ar} ({area.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={areas?.map((area: any) => ({
+                  value: area.id,
+                  label: `${area.name_ar} (${area.name_en})`
+                })) || []}
+              />
               {errors.area_id && (
                 <p className="text-sm text-destructive">{errors.area_id.message}</p>
               )}

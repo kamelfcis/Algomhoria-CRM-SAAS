@@ -95,6 +95,18 @@ async function updateSection(id: string, sectionData: Partial<SectionForm>) {
   return data
 }
 
+async function checkSectionHasProperties(sectionId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('section_id', sectionId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deleteSection(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -269,9 +281,31 @@ export default function SectionsPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (sectionToDelete) {
+  const confirmDelete = async () => {
+    if (!sectionToDelete) return
+
+    try {
+      const hasProperties = await checkSectionHasProperties(sectionToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('sections.cannotDeleteHasProperties') || `This section cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setSectionToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(sectionToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('sections.checkError') || 'Failed to verify if section has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

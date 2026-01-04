@@ -132,6 +132,11 @@ const navigation: NavigationItem[] = [
         icon: Building2,
       },
       {
+        name: 'paymentMethods',
+        href: '/dashboard/payment-methods',
+        icon: CreditCard,
+      },
+      {
         name: 'governorates',
         href: '/dashboard/governorates',
         icon: Map,
@@ -154,14 +159,35 @@ const navigation: NavigationItem[] = [
     ],
   },
   {
-    name: 'properties',
-    href: '/dashboard/properties',
-    icon: Home,
-  },
-  {
-    name: 'propertyImages',
-    href: '/dashboard/property-images',
-    icon: ImageIcon,
+    name: 'propertyManagement',
+    icon: Building2,
+    children: [
+      {
+        name: 'properties',
+        href: '/dashboard/properties',
+        icon: Home,
+      },
+      {
+        name: 'propertyOwners',
+        href: '/dashboard/property-owners',
+        icon: UserCircle,
+      },
+      {
+        name: 'propertyImages',
+        href: '/dashboard/property-images',
+        icon: ImageIcon,
+      },
+      {
+        name: 'propertyComments',
+        href: '/dashboard/property-comments',
+        icon: MessageSquare,
+      },
+      {
+        name: 'bookings',
+        href: '/dashboard/bookings',
+        icon: CalendarCheck,
+      },
+    ],
   },
   {
     name: 'leads',
@@ -180,11 +206,6 @@ const navigation: NavigationItem[] = [
     ],
   },
   {
-    name: 'propertyOwners',
-    href: '/dashboard/property-owners',
-    icon: UserCircle,
-  },
-  {
     name: 'sliders',
     href: '/dashboard/sliders',
     icon: ImageIcon,
@@ -198,21 +219,6 @@ const navigation: NavigationItem[] = [
     name: 'newsletter',
     href: '/dashboard/newsletter',
     icon: Mail,
-  },
-  {
-    name: 'bookings',
-    href: '/dashboard/bookings',
-    icon: CalendarCheck,
-  },
-  {
-    name: 'propertyComments',
-    href: '/dashboard/property-comments',
-    icon: MessageSquare,
-  },
-  {
-    name: 'paymentMethods',
-    href: '/dashboard/payment-methods',
-    icon: CreditCard,
   },
   {
     name: 'roles',
@@ -284,7 +290,7 @@ export function Sidebar() {
 
   // Auto-expand submenus when navigating to a page within them - optimized
   useEffect(() => {
-    const menuItems = ['news', 'masterData', 'projectsData', 'leads']
+    const menuItems = ['news', 'masterData', 'projectsData', 'leads', 'propertyManagement']
     
     setExpandedMenus((prev) => {
       const newSet = new Set(prev)

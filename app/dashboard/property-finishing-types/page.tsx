@@ -95,6 +95,18 @@ async function updateFinishingType(id: string, finishingTypeData: Partial<Finish
   return data
 }
 
+async function checkFinishingTypeHasProperties(finishingTypeId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('finishing_type_id', finishingTypeId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deleteFinishingType(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -262,9 +274,31 @@ export default function PropertyFinishingTypesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (finishingTypeToDelete) {
+  const confirmDelete = async () => {
+    if (!finishingTypeToDelete) return
+
+    try {
+      const hasProperties = await checkFinishingTypeHasProperties(finishingTypeToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyFinishingTypes.cannotDeleteHasProperties') || `This property finishing type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setFinishingTypeToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(finishingTypeToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyFinishingTypes.checkError') || 'Failed to verify if property finishing type has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

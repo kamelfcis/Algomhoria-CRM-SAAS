@@ -210,6 +210,7 @@
     "projects": "Projects",
     "bookings": "Bookings",
     "propertyComments": "Property Comments",
+    "propertyManagement": "Property Management",
     "masterData": "Master Data",
     "propertyTypes": "Property Types",
     "governorates": "Governorates",
@@ -336,7 +337,9 @@
     "deletedSuccessfully": "Property owner \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property owner. Please try again.",
     "updateError": "Failed to update property owner. Please try again.",
-    "deleteError": "Failed to delete property owner. Please try again."
+    "deleteError": "Failed to delete property owner. Please try again.",
+    "cannotDeleteHasProperties": "This property owner cannot be deleted because they have one or more properties associated with them. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if property owner has properties. Please try again."
   },
   "posts": {
     "title": "Posts",
@@ -601,7 +604,9 @@
     "deletedSuccessfully": "Property type \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property type. Please try again.",
     "updateError": "Failed to update property type. Please try again.",
-    "deleteError": "Failed to delete property type. Please try again."
+    "deleteError": "Failed to delete property type. Please try again.",
+    "cannotDeleteHasProperties": "This property type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if property type has properties. Please try again."
   },
   "governorates": {
     "title": "Governorates",
@@ -618,7 +623,9 @@
     "deletedSuccessfully": "Governorate \"{name}\" has been deleted successfully.",
     "createError": "Failed to create governorate. Please try again.",
     "updateError": "Failed to update governorate. Please try again.",
-    "deleteError": "Failed to delete governorate. Please try again."
+    "deleteError": "Failed to delete governorate. Please try again.",
+    "cannotDeleteHasReferences": "This governorate cannot be deleted because it has one or more properties, areas, or featured areas associated with it. Please remove or reassign all references before deleting.",
+    "checkError": "Failed to verify if governorate has references. Please try again."
   },
   "areas": {
     "title": "Areas",
@@ -639,7 +646,9 @@
     "createError": "Failed to create area. Please try again.",
     "updateError": "Failed to update area. Please try again.",
     "deleteError": "Failed to delete area. Please try again.",
-    "orderUpdateError": "Failed to update order. Please try again."
+    "orderUpdateError": "Failed to update order. Please try again.",
+    "cannotDeleteHasReferences": "This area cannot be deleted because it has one or more properties, streets, or featured areas associated with it. Please remove or reassign all references before deleting.",
+    "checkError": "Failed to verify if area has references. Please try again."
   },
   "propertyFacilities": {
     "title": "Property Facilities",
@@ -655,7 +664,9 @@
     "deletedSuccessfully": "Property facility \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property facility. Please try again.",
     "updateError": "Failed to update property facility. Please try again.",
-    "deleteError": "Failed to delete property facility. Please try again."
+    "deleteError": "Failed to delete property facility. Please try again.",
+    "cannotDeleteHasProperties": "This property facility cannot be deleted because it is used in one or more properties. Please remove it from all properties before deleting.",
+    "checkError": "Failed to verify if property facility is used in properties. Please try again."
   },
   "propertyServices": {
     "title": "Property Services",
@@ -671,7 +682,9 @@
     "deletedSuccessfully": "Property service \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property service. Please try again.",
     "updateError": "Failed to update property service. Please try again.",
-    "deleteError": "Failed to delete property service. Please try again."
+    "deleteError": "Failed to delete property service. Please try again.",
+    "cannotDeleteHasProperties": "This property service cannot be deleted because it is used in one or more properties. Please remove it from all properties before deleting.",
+    "checkError": "Failed to verify if property service is used in properties. Please try again."
   },
   "paymentMethods": {
     "title": "Payment Methods",
@@ -681,7 +694,15 @@
     "nameAr": "Name (Arabic)",
     "nameEn": "Name (English)",
     "status": "Status",
-    "createdAt": "Created At"
+    "createdAt": "Created At",
+    "createdSuccessfully": "Payment method \"{name}\" has been created successfully.",
+    "updatedSuccessfully": "Payment method \"{name}\" has been updated successfully.",
+    "deletedSuccessfully": "Payment method \"{name}\" has been deleted successfully.",
+    "createError": "Failed to create payment method. Please try again.",
+    "updateError": "Failed to update payment method. Please try again.",
+    "deleteError": "Failed to delete payment method. Please try again.",
+    "cannotDeleteHasProperties": "This payment method cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if payment method has properties. Please try again."
   },
   "propertyViewTypes": {
     "title": "Property View Types",
@@ -697,7 +718,9 @@
     "deletedSuccessfully": "Property view type \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property view type. Please try again.",
     "updateError": "Failed to update property view type. Please try again.",
-    "deleteError": "Failed to delete property view type. Please try again."
+    "deleteError": "Failed to delete property view type. Please try again.",
+    "cannotDeleteHasProperties": "This property view type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if property view type has properties. Please try again."
   },
   "propertyFinishingTypes": {
     "title": "Property Finishing Types",
@@ -713,7 +736,9 @@
     "deletedSuccessfully": "Property finishing type \"{name}\" has been deleted successfully.",
     "createError": "Failed to create property finishing type. Please try again.",
     "updateError": "Failed to update property finishing type. Please try again.",
-    "deleteError": "Failed to delete property finishing type. Please try again."
+    "deleteError": "Failed to delete property finishing type. Please try again.",
+    "cannotDeleteHasProperties": "This property finishing type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if property finishing type has properties. Please try again."
   },
   "sections": {
     "title": "Sections",
@@ -730,7 +755,9 @@
     "sectionDeleted": "Section \"{name}\" has been deleted successfully.",
     "createError": "Failed to create section. Please try again.",
     "updateError": "Failed to update section. Please try again.",
-    "deleteError": "Failed to delete section. Please try again."
+    "deleteError": "Failed to delete section. Please try again.",
+    "cannotDeleteHasProperties": "This section cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if section has properties. Please try again."
   },
   "streets": {
     "title": "Streets",
@@ -748,7 +775,9 @@
     "deletedSuccessfully": "Street \"{name}\" has been deleted successfully.",
     "createError": "Failed to create street. Please try again.",
     "updateError": "Failed to update street. Please try again.",
-    "deleteError": "Failed to delete street. Please try again."
+    "deleteError": "Failed to delete street. Please try again.",
+    "cannotDeleteHasProperties": "This street cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.",
+    "checkError": "Failed to verify if street has properties. Please try again."
   },
   "featuredAreas": {
     "title": "Featured Areas",

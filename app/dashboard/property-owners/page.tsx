@@ -102,6 +102,18 @@ async function updatePropertyOwner(id: string, ownerData: Partial<PropertyOwnerF
   return data
 }
 
+async function checkOwnerHasProperties(ownerId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('owner_id', ownerId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deletePropertyOwner(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -264,9 +276,33 @@ export default function PropertyOwnersPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (ownerToDelete) {
+  const confirmDelete = async () => {
+    if (!ownerToDelete) return
+
+    try {
+      // Check if property owner has related properties
+      const hasProperties = await checkOwnerHasProperties(ownerToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyOwners.cannotDeleteHasProperties') || `This property owner cannot be deleted because they have one or more properties associated with them. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setOwnerToDelete(null)
+        return
+      }
+
+      // If no properties, proceed with deletion
       deleteMutation.mutate(ownerToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyOwners.checkError') || 'Failed to verify if property owner has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

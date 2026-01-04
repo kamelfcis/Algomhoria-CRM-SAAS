@@ -97,6 +97,42 @@ async function updateGovernorate(id: string, governorateData: Partial<Governorat
   return data
 }
 
+async function checkGovernorateHasReferences(governorateId: string) {
+  const supabase = createClient()
+  
+  // Check properties
+  const { data: properties, error: propertiesError } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('governorate_id', governorateId)
+    .limit(1)
+
+  if (propertiesError) throw propertiesError
+  if (properties && properties.length > 0) return true
+
+  // Check areas
+  const { data: areas, error: areasError } = await supabase
+    .from('areas')
+    .select('id')
+    .eq('governorate_id', governorateId)
+    .limit(1)
+
+  if (areasError) throw areasError
+  if (areas && areas.length > 0) return true
+
+  // Check featured_areas
+  const { data: featuredAreas, error: featuredAreasError } = await supabase
+    .from('featured_areas')
+    .select('id')
+    .eq('governorate_id', governorateId)
+    .limit(1)
+
+  if (featuredAreasError) throw featuredAreasError
+  if (featuredAreas && featuredAreas.length > 0) return true
+
+  return false
+}
+
 async function deleteGovernorate(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -300,9 +336,31 @@ export default function GovernoratesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (governorateToDelete) {
+  const confirmDelete = async () => {
+    if (!governorateToDelete) return
+
+    try {
+      const hasReferences = await checkGovernorateHasReferences(governorateToDelete.id)
+      
+      if (hasReferences) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('governorates.cannotDeleteHasReferences') || `This governorate cannot be deleted because it has one or more properties, areas, or featured areas associated with it. Please remove or reassign all references before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setGovernorateToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(governorateToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('governorates.checkError') || 'Failed to verify if governorate has references. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

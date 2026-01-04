@@ -95,6 +95,18 @@ async function updatePropertyType(id: string, typeData: Partial<PropertyTypeForm
   return data
 }
 
+async function checkPropertyTypeHasProperties(propertyTypeId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('property_type_id', propertyTypeId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deletePropertyType(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -263,9 +275,31 @@ export default function PropertyTypesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (typeToDelete) {
+  const confirmDelete = async () => {
+    if (!typeToDelete) return
+
+    try {
+      const hasProperties = await checkPropertyTypeHasProperties(typeToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyTypes.cannotDeleteHasProperties') || `This property type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setTypeToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(typeToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyTypes.checkError') || 'Failed to verify if property type has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

@@ -95,6 +95,18 @@ async function updateViewType(id: string, viewTypeData: Partial<ViewTypeForm>) {
   return data
 }
 
+async function checkViewTypeHasProperties(viewTypeId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('view_type_id', viewTypeId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deleteViewType(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -262,9 +274,31 @@ export default function PropertyViewTypesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (viewTypeToDelete) {
+  const confirmDelete = async () => {
+    if (!viewTypeToDelete) return
+
+    try {
+      const hasProperties = await checkViewTypeHasProperties(viewTypeToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyViewTypes.cannotDeleteHasProperties') || `This property view type cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setViewTypeToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(viewTypeToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyViewTypes.checkError') || 'Failed to verify if property view type has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

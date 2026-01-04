@@ -95,6 +95,18 @@ async function updateService(id: string, serviceData: Partial<ServiceForm>) {
   return data
 }
 
+async function checkServiceHasProperties(serviceId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('property_property_services')
+    .select('property_id')
+    .eq('service_id', serviceId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deleteService(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -262,9 +274,31 @@ export default function PropertyServicesPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (serviceToDelete) {
+  const confirmDelete = async () => {
+    if (!serviceToDelete) return
+
+    try {
+      const hasProperties = await checkServiceHasProperties(serviceToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyServices.cannotDeleteHasProperties') || `This property service cannot be deleted because it is used in one or more properties. Please remove it from all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setServiceToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(serviceToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyServices.checkError') || 'Failed to verify if property service is used in properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 

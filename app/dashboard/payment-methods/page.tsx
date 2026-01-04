@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
+import { useToast } from '@/hooks/use-toast'
+import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
@@ -93,6 +95,18 @@ async function updatePaymentMethod(id: string, methodData: Partial<PaymentMethod
   return data
 }
 
+async function checkPaymentMethodHasProperties(paymentMethodId: string) {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id')
+    .eq('payment_method_id', paymentMethodId)
+    .limit(1)
+
+  if (error) throw error
+  return (data && data.length > 0)
+}
+
 async function deletePaymentMethod(id: string) {
   const supabase = createClient()
   const { error } = await supabase
@@ -107,6 +121,7 @@ export default function PaymentMethodsPage() {
   const t = useTranslations()
   const { profile } = useAuthStore()
   const queryClient = useQueryClient()
+  const { toast } = useToast()
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingMethod, setEditingMethod] = useState<PaymentMethod | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -119,30 +134,93 @@ export default function PaymentMethodsPage() {
 
   const createMutation = useMutation({
     mutationFn: createPaymentMethod,
-    onSuccess: () => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['payment-methods'] })
       setIsDialogOpen(false)
       reset()
+      // Log activity
+      await ActivityLogger.create('payment_method', data.id, data.name_en || data.name_ar)
+      const methodName = data?.name_en || data?.name_ar || 'Payment Method'
+      const message = t('paymentMethods.createdSuccessfully')
+      toast({
+        title: t('common.success') || 'Success',
+        description: message ? message.replace('{name}', methodName) : `Payment method "${methodName}" has been created successfully.`,
+        variant: 'success',
+        duration: 5000,
+      })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('paymentMethods.createError') || 'Failed to create payment method',
+        variant: 'destructive',
+      })
     },
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<PaymentMethodForm> }) =>
       updatePaymentMethod(id, data),
-    onSuccess: () => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['payment-methods'] })
       setIsDialogOpen(false)
+      const previousMethod = editingMethod
       setEditingMethod(null)
       reset()
+      // Log activity
+      if (previousMethod) {
+        await ActivityLogger.update(
+          'payment_method',
+          data.id,
+          data.name_en || data.name_ar,
+          previousMethod,
+          data
+        )
+      }
+      const methodName = data?.name_en || data?.name_ar || previousMethod?.name_en || previousMethod?.name_ar || 'Payment Method'
+      const message = t('paymentMethods.updatedSuccessfully')
+      toast({
+        title: t('common.success') || 'Success',
+        description: message ? message.replace('{name}', methodName) : `Payment method "${methodName}" has been updated successfully.`,
+        variant: 'success',
+        duration: 5000,
+      })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('paymentMethods.updateError') || 'Failed to update payment method',
+        variant: 'destructive',
+      })
     },
   })
 
   const deleteMutation = useMutation({
     mutationFn: deletePaymentMethod,
-    onSuccess: () => {
+    onSuccess: async (_, deletedId) => {
+      const deletedMethod = methodToDelete || methods?.find(m => m.id === deletedId)
       queryClient.invalidateQueries({ queryKey: ['payment-methods'] })
       setDeleteDialogOpen(false)
       setMethodToDelete(null)
+      // Log activity
+      if (deletedMethod) {
+        await ActivityLogger.delete('payment_method', deletedMethod.id, deletedMethod.name_en || deletedMethod.name_ar)
+      }
+      const deletedName = deletedMethod?.name_en || deletedMethod?.name_ar || 'Payment Method'
+      const message = t('paymentMethods.deletedSuccessfully')
+      toast({
+        title: t('common.success') || 'Success',
+        description: message ? message.replace('{name}', deletedName) : `Payment method "${deletedName}" has been deleted successfully.`,
+        variant: 'success',
+        duration: 5000,
+      })
+    },
+    onError: (error: Error) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('paymentMethods.deleteError') || 'Failed to delete payment method',
+        variant: 'destructive',
+      })
     },
   })
 
@@ -180,9 +258,31 @@ export default function PaymentMethodsPage() {
     setDeleteDialogOpen(true)
   }
 
-  const confirmDelete = () => {
-    if (methodToDelete) {
+  const confirmDelete = async () => {
+    if (!methodToDelete) return
+
+    try {
+      const hasProperties = await checkPaymentMethodHasProperties(methodToDelete.id)
+      
+      if (hasProperties) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('paymentMethods.cannotDeleteHasProperties') || `This payment method cannot be deleted because it has one or more properties associated with it. Please remove or reassign all properties before deleting.`,
+          variant: 'destructive',
+          duration: 5000,
+        })
+        setDeleteDialogOpen(false)
+        setMethodToDelete(null)
+        return
+      }
+
       deleteMutation.mutate(methodToDelete.id)
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('paymentMethods.checkError') || 'Failed to verify if payment method has properties. Please try again.',
+        variant: 'destructive',
+      })
     }
   }
 
