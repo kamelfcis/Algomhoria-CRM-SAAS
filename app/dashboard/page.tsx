@@ -73,8 +73,8 @@ async function getDashboardStats() {
     projectsResult,
     areasResult,
   ] = await Promise.all([
-    supabase.from('users').select('*', { count: 'exact', head: true }),
-    supabase.from('users').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabase.from('users').select('id', { count: 'exact', head: true }),
+    supabase.from('users').select('id', { count: 'exact', head: true }).eq('status', 'active'),
     supabase.from('posts').select('*', { count: 'exact', head: true }),
     supabase.from('posts').select('*', { count: 'exact', head: true }).eq('status', 'active'),
     supabase.from('properties').select('*', { count: 'exact', head: true }),

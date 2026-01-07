@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ImageUpload } from '@/components/ui/image-upload'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const postGallerySchema = z.object({
   post_id: z.string().uuid('Please select a post'),
@@ -162,9 +164,13 @@ export default function PostGalleryPage() {
     queryFn: getPosts,
   })
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('post_gallery')
+
   const { data: images, isLoading } = useQuery({
     queryKey: ['post_gallery', postFilter],
     queryFn: () => getPostGalleryImages(postFilter),
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const createMutation = useMutation({
@@ -334,9 +340,27 @@ export default function PostGalleryPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'sales'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('postGallery.noPermission') || 'You do not have permission to view post gallery.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   const columns = [
     {

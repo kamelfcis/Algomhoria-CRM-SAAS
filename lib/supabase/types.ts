@@ -43,13 +43,86 @@ export interface Database {
         Insert: Omit<Database['public']['Tables']['team_users']['Row'], 'id' | 'created_at' | 'updated_at'>
         Update: Partial<Database['public']['Tables']['team_users']['Insert']>
       }
+      permissions: {
+        Row: {
+          id: string
+          name: string
+          description: string | null
+          description_ar: string | null
+          resource: string
+          action: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['permissions']['Row'], 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Database['public']['Tables']['permissions']['Insert']>
+      }
+      roles: {
+        Row: {
+          id: string
+          name: string
+          name_ar: string | null
+          description: string | null
+          description_ar: string | null
+          status: 'active' | 'inactive'
+          is_system_role: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['roles']['Row'], 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Database['public']['Tables']['roles']['Insert']>
+      }
+      role_permissions: {
+        Row: {
+          id: string
+          role_id: string
+          permission_id: string
+          created_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['role_permissions']['Row'], 'id' | 'created_at'>
+        Update: Partial<Database['public']['Tables']['role_permissions']['Insert']>
+      }
+      user_roles: {
+        Row: {
+          id: string
+          user_id: string
+          role_id: string
+          assigned_by: string | null
+          assigned_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['user_roles']['Row'], 'id' | 'assigned_at'>
+        Update: Partial<Database['public']['Tables']['user_roles']['Insert']>
+      }
       // Add other tables as needed
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      user_has_permission: {
+        Args: {
+          user_uuid: string
+          permission_name: string
+        }
+        Returns: boolean
+      }
+      get_user_permissions: {
+        Args: {
+          user_uuid: string
+        }
+        Returns: {
+          permission_name: string
+        }[]
+      }
+      get_user_roles: {
+        Args: {
+          user_uuid: string
+        }
+        Returns: {
+          role_name: string
+          role_id: string
+        }[]
+      }
     }
     Enums: {
       user_role: 'admin' | 'moderator' | 'sales' | 'user'

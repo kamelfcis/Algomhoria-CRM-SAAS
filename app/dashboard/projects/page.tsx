@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { useToast } from '@/hooks/use-toast'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import {
@@ -161,12 +162,16 @@ export default function ProjectsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('projects')
+
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: getProjects,
+    enabled: canView, // Only fetch if user has view permission
   })
 
-  const { data: categories } = useQuery({
+  const { data: categories, refetch: refetchCategories } = useQuery({
     queryKey: ['project-categories-for-select'],
     queryFn: getProjectCategories,
   })
@@ -293,6 +298,10 @@ export default function ProjectsPage() {
     },
   })
 
+  // Watch category_id and status for controlled Select components
+  const selectedCategoryId = watch('category_id')
+  const selectedStatus = watch('status')
+
   const onSubmit = (data: ProjectForm) => {
     if (editingProject) {
       updateMutation.mutate({ id: editingProject.id, data })
@@ -313,6 +322,7 @@ export default function ProjectsPage() {
     setValue('category_id', project.category_id || undefined)
     setValue('order_index', project.order_index)
     setValue('status', project.status as any)
+    refetchCategories() // Refresh categories list
     setIsDialogOpen(true)
   }
 
@@ -348,12 +358,26 @@ export default function ProjectsPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
-
-  if (isLoading) {
+  if (isLoading || isCheckingPermissions) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('projects.noPermission') || 'You do not have permission to view projects.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   const columns = [
@@ -450,6 +474,7 @@ export default function ProjectsPage() {
           <Button onClick={() => {
             setEditingProject(null)
             reset()
+            refetchCategories() // Refresh categories list
             setIsDialogOpen(true)
           }}>
             <Plus className="mr-2 h-4 w-4" />
@@ -567,14 +592,14 @@ export default function ProjectsPage() {
                 <Label htmlFor="category_id">{t('projects.category') || 'Category'}</Label>
                 <Select
                   onValueChange={(value) => setValue('category_id', value === 'none' ? undefined : value)}
-                  defaultValue={editingProject?.category_id || 'none'}
+                  value={selectedCategoryId || 'none'}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No Category</SelectItem>
+                    <SelectItem value="none">{t('projects.noCategory') || 'No Category'}</SelectItem>
                     {categories?.map((category: any) => (
                       <SelectItem key={category.id} value={category.id}>
                         {category.title_ar} ({category.title_en})
@@ -602,15 +627,15 @@ export default function ProjectsPage() {
               <Label htmlFor="status">{t('projects.status') || 'Status'}</Label>
               <Select
                 onValueChange={(value) => setValue('status', value as any)}
-                defaultValue={editingProject?.status || 'active'}
+                value={selectedStatus || 'active'}
                 disabled={createMutation.isPending || updateMutation.isPending}
               >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
+                  <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

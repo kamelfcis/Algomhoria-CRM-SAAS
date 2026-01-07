@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Check, X, Trash2, MessageSquare } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   Dialog,
   DialogContent,
@@ -30,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -135,9 +137,13 @@ export default function PropertyCommentsPage() {
   const [bulkApproveDialogOpen, setBulkApproveDialogOpen] = useState(false)
   const [bulkRejectDialogOpen, setBulkRejectDialogOpen] = useState(false)
 
+  // Check permissions
+  const { canView, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('property_comments')
+
   const { data: comments, isLoading } = useQuery({
     queryKey: ['property-comments'],
     queryFn: getComments,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const updateMutation = useMutation({
@@ -322,8 +328,27 @@ export default function PropertyCommentsPage() {
     bulkRejectMutation.mutate(pending.map(c => c.id))
   }
 
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={false} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('propertyComments.noPermission') || 'You do not have permission to view property comments.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   // Filter comments
   const filteredComments = comments?.filter((comment) => {

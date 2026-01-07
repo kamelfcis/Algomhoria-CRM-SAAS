@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
@@ -40,44 +40,133 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import { Plus, Pencil, Trash2, Key } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
-import { ROLES, USER_STATUS, Role, UserStatus } from '@/lib/constants'
+import { USER_STATUS, UserStatus } from '@/lib/constants'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { useToast } from '@/hooks/use-toast'
+import { Checkbox } from '@/components/ui/checkbox'
+// Note: We can't use isAdmin from permission-helpers in client-side
+// because it uses createAdminClient which needs Service Role Key
+// So we'll check admin status directly using Supabase client
 
 // Unified schema - password is optional but validated in onSubmit
 const userSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.string().email('Invalid email address'),
   phone_number: z.string().optional(),
-  role: z.enum(['admin', 'moderator', 'sales', 'user']),
+  role_ids: z.array(z.string().uuid()).optional(), // Make roles optional
   password: z.string().optional(),
 })
 
 type UserForm = z.infer<typeof userSchema>
 
+interface Role {
+  id: string
+  name: string
+  name_ar: string | null
+  status: 'active' | 'inactive'
+}
 
 interface User {
   id: string
   email: string
   name: string
   phone_number: string | null
-  role: Role
+  roles: Role[]
   status: UserStatus
   created_at: string
 }
 
-async function getUsers() {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  if (error) throw error
-  return data as User[]
+async function getRoles() {
+  const response = await fetch('/api/roles')
+  if (!response.ok) throw new Error('Failed to fetch roles')
+  const { data } = await response.json()
+  return data as Role[]
 }
 
-async function createUser(userData: { name: string; email: string; phone_number?: string; role: Role; password: string }) {
+async function getUsers() {
+  const supabase = createClient()
+  
+  // Try with minimal columns first to avoid RLS issues
+  let query = supabase
+    .from('users')
+    .select('id, email, name, phone_number, status, created_at, updated_at, author_image_url')
+  
+  const { data: users, error } = await query.order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('Error fetching users:', error)
+    console.error('Error code:', error.code)
+    console.error('Error message:', error.message)
+    console.error('Error details:', JSON.stringify(error, null, 2))
+    
+    // If it's a permission error, show helpful message
+    if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
+      console.error('RLS Policy Error: Make sure you have admin role and RLS policies are set up correctly')
+    }
+    // Try with even fewer columns if the above fails
+    if (error.code === '42703' || error.message?.includes('column')) {
+      const { data: simpleUsers, error: simpleError } = await supabase
+        .from('users')
+        .select('id, email, name, status, created_at')
+        .order('created_at', { ascending: false })
+      
+      if (simpleError) {
+        throw simpleError
+      }
+      
+      // Map to full structure with defaults
+      return (simpleUsers || []).map((u: any) => ({
+        ...u,
+        phone_number: null,
+        updated_at: u.created_at,
+        author_image_url: null,
+        roles: [],
+      })) as User[]
+    }
+    throw error
+  }
+
+  if (!users || users.length === 0) {
+    return []
+  }
+
+  // Fetch roles for each user
+  const usersWithRoles = await Promise.all(
+    users.map(async (user: any) => {
+      try {
+        const { data: userRoles } = await supabase
+          .from('user_roles')
+          .select(`
+            role_id,
+            roles!inner(id, name, name_ar, status)
+          `)
+          .eq('user_id', user.id)
+
+        const roles = userRoles?.map((ur: any) => ({
+          id: ur.roles.id,
+          name: ur.roles.name,
+          name_ar: ur.roles.name_ar,
+          status: ur.roles.status,
+        })) || []
+
+        return {
+          ...user,
+          roles,
+        } as User
+      } catch (roleError) {
+        console.error(`Error fetching roles for user ${user.id}:`, roleError)
+        return {
+          ...user,
+          roles: [],
+        } as User
+      }
+    })
+  )
+
+  return usersWithRoles
+}
+
+async function createUser(userData: { name: string; email: string; phone_number?: string; role_ids?: string[]; password: string }) {
   if (!userData.password || userData.password.length < 6) {
     throw new Error('Password is required and must be at least 6 characters')
   }
@@ -93,31 +182,83 @@ async function createUser(userData: { name: string; email: string; phone_number?
     throw new Error('Invalid email address')
   }
 
+  // role_ids is optional - can be assigned later
+
+  // Prepare request body - ensure phone_number is null if empty, not undefined
+  const requestBody: any = {
+    name: userData.name.trim(),
+    email: userData.email.trim().toLowerCase(),
+    password: userData.password,
+  }
+  
+  // Only include phone_number if it has a value
+  if (userData.phone_number && userData.phone_number.trim()) {
+    requestBody.phone_number = userData.phone_number.trim()
+  } else {
+    requestBody.phone_number = null
+  }
+  
+  // Only include role_ids if provided (optional - can be assigned later)
+  if (userData.role_ids && userData.role_ids.length > 0) {
+    requestBody.role_ids = userData.role_ids
+  }
+
+  console.log('Creating user with data:', {
+    ...requestBody,
+    password: '***' // Don't log password
+  })
+
   const response = await fetch('/api/users', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      name: userData.name.trim(), // Trim whitespace and ensure name is sent
-      email: userData.email.trim().toLowerCase(), // Normalize email
-      phone_number: userData.phone_number?.trim() || undefined,
-      role: userData.role,
-      password: userData.password,
-    }),
+    body: JSON.stringify(requestBody),
   })
 
   if (!response.ok) {
     const errorData = await response.json()
-    // Handle different error formats
+    console.error('Error creating user - Full error data:', JSON.stringify(errorData, null, 2))
     let errorMessage = 'Failed to create user'
-    if (typeof errorData.error === 'string') {
+    
+    // Handle Zod validation errors
+    if (errorData.details && Array.isArray(errorData.details)) {
+      errorMessage = errorData.details.map((e: any) => {
+        if (typeof e === 'string') return e
+        const path = e.path?.join('.') || 'field'
+        return `${path}: ${e.message || 'Invalid value'}`
+      }).join(', ')
+    } else if (errorData.message) {
+      // Check for message field (from API)
+      errorMessage = errorData.message
+      if (errorData.code) {
+        errorMessage += ` (Code: ${errorData.code})`
+      }
+      if (errorData.hint) {
+        errorMessage += ` - ${errorData.hint}`
+      }
+      if (errorData.details) {
+        errorMessage += ` - Details: ${JSON.stringify(errorData.details)}`
+      }
+    } else if (typeof errorData.error === 'string') {
       errorMessage = errorData.error
+      // Try to get additional info
+      if (errorData.code) {
+        errorMessage += ` (Code: ${errorData.code})`
+      }
+      if (errorData.hint) {
+        errorMessage += ` - ${errorData.hint}`
+      }
+      if (errorData.details) {
+        errorMessage += ` - Details: ${JSON.stringify(errorData.details)}`
+      }
     } else if (Array.isArray(errorData.error)) {
       errorMessage = errorData.error.map((e: any) => e.message || e).join(', ')
     } else if (errorData.error?.message) {
       errorMessage = errorData.error.message
     }
+    
+    console.error('Final error message:', errorMessage)
     throw new Error(errorMessage)
   }
 
@@ -125,7 +266,7 @@ async function createUser(userData: { name: string; email: string; phone_number?
   return data
 }
 
-async function updateUser(id: string, userData: { name: string; phone_number?: string | null; role: Role }) {
+async function updateUser(id: string, userData: { name: string; phone_number?: string | null; role_ids: string[] }) {
   const response = await fetch(`/api/users/${id}`, {
     method: 'PATCH',
     headers: {
@@ -134,7 +275,7 @@ async function updateUser(id: string, userData: { name: string; phone_number?: s
     body: JSON.stringify({
       name: userData.name,
       phone_number: userData.phone_number || null,
-      role: userData.role,
+      role_ids: userData.role_ids,
     }),
   })
 
@@ -191,9 +332,22 @@ export default function UsersPage() {
   const [userToDelete, setUserToDelete] = useState<User | null>(null)
 
   const { data: users, isLoading } = useQuery({
-    queryKey: ['users'],
+    queryKey: ['users', 'v2'], // Added v2 to bust cache
     queryFn: getUsers,
   })
+
+  // Only fetch roles when editing (not needed for create)
+  const { data: roles, error: rolesError } = useQuery({
+    queryKey: ['roles'],
+    queryFn: getRoles,
+    retry: 2,
+    enabled: !!editingUser, // Only fetch when editing
+  })
+
+  // Show error if roles can't be loaded (only when editing)
+  if (rolesError && editingUser) {
+    console.error('Error loading roles:', rolesError)
+  }
 
   const createMutation = useMutation({
     mutationFn: createUser,
@@ -205,7 +359,7 @@ export default function UsersPage() {
         name: '',
         email: '',
         phone_number: '',
-        role: 'user',
+        role_ids: [],
         password: '',
       })
       // Log activity
@@ -243,7 +397,7 @@ export default function UsersPage() {
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name: string; phone_number?: string | null; role: Role } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name: string; phone_number?: string | null; role_ids: string[] } }) =>
       updateUser(id, data),
     onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['users'] })
@@ -253,7 +407,7 @@ export default function UsersPage() {
         name: '',
         email: '',
         phone_number: '',
-        role: 'user',
+        role_ids: [],
         password: '',
       })
       // Log activity
@@ -414,23 +568,32 @@ export default function UsersPage() {
       name: '',
       email: '',
       phone_number: '',
-      role: 'user',
+      role_ids: [],
       password: '',
     },
   })
 
-  const selectedRole = watch('role')
+  const selectedRoleIds = watch('role_ids') || []
   const passwordValue = watch('password')
 
   const onSubmit = (data: UserForm) => {
     if (editingUser) {
       // For update, exclude password and email (email cannot be changed)
+      if (!data.role_ids || data.role_ids.length === 0) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: 'At least one role is required',
+          variant: 'destructive',
+          duration: 4000,
+        })
+        return
+      }
       updateMutation.mutate({ 
         id: editingUser.id, 
         data: {
           name: data.name,
           phone_number: data.phone_number || null,
-          role: data.role,
+          role_ids: data.role_ids,
         }
       })
     } else {
@@ -445,11 +608,12 @@ export default function UsersPage() {
         setValue('password', '', { shouldValidate: true })
         return
       }
+      // role_ids is optional - can be assigned later
       createMutation.mutate({
         name: data.name,
         email: data.email,
         phone_number: data.phone_number,
-        role: data.role,
+        role_ids: data.role_ids || [], // Optional - can be empty
         password: data.password,
       })
     }
@@ -462,7 +626,7 @@ export default function UsersPage() {
       name: user.name,
       email: user.email,
       phone_number: user.phone_number || '',
-      role: user.role,
+      role_ids: user.roles.map(r => r.id),
       password: '', // Clear password field for edit
     })
     setIsDialogOpen(true)
@@ -476,7 +640,7 @@ export default function UsersPage() {
         name: '',
         email: '',
         phone_number: '',
-        role: 'user',
+        role_ids: [],
         password: '',
       })
     }
@@ -502,9 +666,70 @@ export default function UsersPage() {
     user.email.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const canCreate = profile?.role === 'admin'
-  const canEdit = profile?.role === 'admin'
-  const canDelete = profile?.role === 'admin'
+  // Check if user is admin using user_roles (client-side check)
+  const [isUserAdmin, setIsUserAdmin] = useState(false)
+  const [isCheckingAdmin, setIsCheckingAdmin] = useState(true)
+  
+  useEffect(() => {
+    const checkAdminStatus = async () => {
+      if (profile?.id) {
+        setIsCheckingAdmin(true)
+        try {
+          const supabase = createClient()
+          
+          // Check if user has admin role using regular client
+          const { data: userRoles, error } = await supabase
+            .from('user_roles')
+            .select(`
+              role_id,
+              roles!inner(name, status)
+            `)
+            .eq('user_id', profile.id)
+          
+          if (error) {
+            console.error('Error fetching user roles:', error)
+            setIsUserAdmin(false)
+          } else {
+            const hasAdminRole = userRoles?.some((ur: any) => 
+              ur.roles?.name === 'admin' && ur.roles?.status === 'active'
+            ) ?? false
+            
+            console.log('Admin status check:', { 
+              userId: profile.id, 
+              isAdmin: hasAdminRole,
+              roles: userRoles 
+            })
+            setIsUserAdmin(hasAdminRole)
+          }
+        } catch (error) {
+          console.error('Error checking admin status:', error)
+          setIsUserAdmin(false)
+        } finally {
+          setIsCheckingAdmin(false)
+        }
+      } else {
+        console.log('No profile ID available')
+        setIsUserAdmin(false)
+        setIsCheckingAdmin(false)
+      }
+    }
+    
+    checkAdminStatus()
+  }, [profile?.id])
+  
+  const canCreate = isUserAdmin
+  const canEdit = isUserAdmin
+  const canDelete = isUserAdmin
+  
+  // Debug log
+  console.log('User permissions:', { 
+    profileId: profile?.id, 
+    isUserAdmin, 
+    isCheckingAdmin,
+    canCreate, 
+    canEdit, 
+    canDelete 
+  })
 
   if (isLoading) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
@@ -512,12 +737,21 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
+      {/* Debug info - remove in production */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 text-xs">
+          <strong>Debug Info:</strong> Profile ID: {profile?.id || 'None'}, 
+          Is Admin: {isUserAdmin ? 'Yes' : 'No'}, 
+          Checking: {isCheckingAdmin ? 'Yes' : 'No'}
+        </div>
+      )}
+      
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{t('users.title')}</h1>
           <p className="text-sm sm:text-base text-muted-foreground mt-1">{t('users.subtitle') || 'Manage users and their roles'}</p>
         </div>
-        {canCreate && (
+        {canCreate && !isCheckingAdmin && (
           <Button 
             onClick={() => {
               setEditingUser(null)
@@ -525,13 +759,19 @@ export default function UsersPage() {
                 name: '',
                 email: '',
                 phone_number: '',
-                role: 'user',
+                role_ids: [],
                 password: '',
               })
               setIsDialogOpen(true)
             }}
             className="w-full sm:w-auto"
           >
+            <Plus className="mr-2 h-4 w-4" />
+            {t('users.createUser')}
+          </Button>
+        )}
+        {isCheckingAdmin && (
+          <Button disabled className="w-full sm:w-auto">
             <Plus className="mr-2 h-4 w-4" />
             {t('users.createUser')}
           </Button>
@@ -566,45 +806,58 @@ export default function UsersPage() {
                 <table className="w-full border-collapse">
                   <thead>
                     <tr className="border-b bg-muted/50">
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm">{t('users.name')}</th>
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm">{t('users.email')}</th>
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm hidden sm:table-cell">{t('users.phone')}</th>
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm">{t('users.role')}</th>
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm">{t('users.status')}</th>
-                      <th className="text-left p-3 sm:p-4 font-semibold text-sm">{t('users.actions')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm">{t('users.name')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm">{t('users.email')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm hidden sm:table-cell">{t('users.phone')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm">{t('users.role')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm">{t('users.status')}</th>
+                      <th className="text-center p-3 sm:p-4 font-semibold text-sm">{t('users.actions')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredUsers?.map((user) => (
                       <tr key={user.id} className="border-b hover:bg-muted/30 transition-colors">
-                        <td className="p-3 sm:p-4 font-medium">{user.name || '-'}</td>
-                        <td className="p-3 sm:p-4 text-sm text-muted-foreground">{user.email}</td>
-                        <td className="p-3 sm:p-4 hidden sm:table-cell text-sm text-muted-foreground">{user.phone_number || '-'}</td>
-                        <td className="p-3 sm:p-4">
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
-                            {user.role}
-                          </span>
+                        <td className="text-center p-3 sm:p-4 font-medium">{user.name || '-'}</td>
+                        <td className="text-center p-3 sm:p-4 text-sm text-muted-foreground">{user.email}</td>
+                        <td className="text-center p-3 sm:p-4 hidden sm:table-cell text-sm text-muted-foreground">{user.phone_number || '-'}</td>
+                        <td className="text-center p-3 sm:p-4">
+                          <div className="flex flex-wrap gap-1 justify-center">
+                            {user.roles && user.roles.length > 0 ? (
+                              user.roles.map((role) => (
+                                <span
+                                  key={role.id}
+                                  className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20"
+                                >
+                                  {role.name}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-xs text-muted-foreground">No roles</span>
+                            )}
+                          </div>
                         </td>
-                        <td className="p-3 sm:p-4">
-                          <Select
-                            value={user.status}
-                            onValueChange={(value: UserStatus) =>
-                              handleStatusChange(user.id, value)
-                            }
-                            disabled={!canEdit || statusMutation.isPending}
-                          >
-                            <SelectTrigger className="w-32 sm:w-36 h-9">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="active">{t('users.statusLabels.active') || t('users.activate')}</SelectItem>
-                              <SelectItem value="inactive">{t('users.statusLabels.inactive') || t('users.deactivate')}</SelectItem>
-                              <SelectItem value="suspended">{t('users.statusLabels.suspended') || t('users.suspend')}</SelectItem>
-                            </SelectContent>
-                          </Select>
+                        <td className="text-center p-3 sm:p-4">
+                          <div className="flex justify-center">
+                            <Select
+                              value={user.status}
+                              onValueChange={(value: UserStatus) =>
+                                handleStatusChange(user.id, value)
+                              }
+                              disabled={!canEdit || statusMutation.isPending}
+                            >
+                              <SelectTrigger className="w-32 sm:w-36 h-9">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="active">{t('users.statusLabels.active') || t('users.activate')}</SelectItem>
+                                <SelectItem value="inactive">{t('users.statusLabels.inactive') || t('users.deactivate')}</SelectItem>
+                                <SelectItem value="suspended">{t('users.statusLabels.suspended') || t('users.suspend')}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </td>
-                        <td className="p-3 sm:p-4">
-                          <div className="flex gap-1 sm:gap-2">
+                        <td className="text-center p-3 sm:p-4">
+                          <div className="flex gap-1 sm:gap-2 justify-center">
                             {canEdit && (
                               <>
                                 <Button
@@ -753,29 +1006,53 @@ export default function UsersPage() {
               )}
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="role">
-                {t('users.role')} <span className="text-destructive">*</span>
-              </Label>
-              <Select
-                value={selectedRole}
-                onValueChange={(value) => setValue('role', value as Role, { shouldValidate: true })}
-                disabled={createMutation.isPending || updateMutation.isPending}
-              >
-                <SelectTrigger className={errors.role ? 'border-destructive focus-visible:ring-destructive' : ''}>
-                  <SelectValue placeholder={t('users.selectRole') || 'Select a role'} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">{t('users.roles.admin') || 'Admin - Full system access'}</SelectItem>
-                  <SelectItem value="moderator">{t('users.roles.moderator') || 'Moderator - Content management'}</SelectItem>
-                  <SelectItem value="sales">{t('users.roles.sales') || 'Sales - Sales operations'}</SelectItem>
-                  <SelectItem value="user">{t('users.roles.user') || 'User - Basic access'}</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.role && (
-                <p className="text-sm text-destructive mt-1" role="alert">{errors.role.message}</p>
-              )}
-            </div>
+            {/* Roles section removed for create - can be assigned later from users page */}
+            {editingUser && (
+              <div className="space-y-2">
+                <Label>
+                  {t('users.role')} <span className="text-destructive">*</span>
+                </Label>
+                <div className="space-y-2 border rounded-md p-4 max-h-48 overflow-y-auto">
+                  {rolesError && (
+                    <p className="text-sm text-destructive mb-2">
+                      Error loading roles: {rolesError.message}. Please refresh the page.
+                    </p>
+                  )}
+                  {!rolesError && (!roles || roles.length === 0) && (
+                    <p className="text-sm text-muted-foreground mb-2">
+                      No roles available. Please create roles first.
+                    </p>
+                  )}
+                  {roles?.filter(r => r.status === 'active').map((role) => (
+                    <div key={role.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`role-${role.id}`}
+                        checked={selectedRoleIds.includes(role.id)}
+                        onCheckedChange={(checked) => {
+                          const currentIds = selectedRoleIds || []
+                          if (checked) {
+                            setValue('role_ids', [...currentIds, role.id], { shouldValidate: true })
+                          } else {
+                            setValue('role_ids', currentIds.filter(id => id !== role.id), { shouldValidate: true })
+                          }
+                        }}
+                      />
+                      <Label htmlFor={`role-${role.id}`} className="flex-1 cursor-pointer">
+                        <div>
+                          <span className="font-medium">{role.name}</span>
+                          {role.name_ar && (
+                            <span className="text-sm text-muted-foreground ml-2">({role.name_ar})</span>
+                          )}
+                        </div>
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+                {errors.role_ids && (
+                  <p className="text-sm text-destructive mt-1" role="alert">{errors.role_ids.message}</p>
+                )}
+              </div>
+            )}
 
             {!editingUser && (
               <div className="space-y-2">

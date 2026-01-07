@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { useToast } from '@/hooks/use-toast'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import {
@@ -42,6 +43,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const streetSchema = z.object({
   area_id: z.string().uuid('Area is required'),
@@ -163,9 +165,13 @@ export default function StreetsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [streetToDelete, setStreetToDelete] = useState<Street | null>(null)
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('streets')
+
   const { data: streets, isLoading } = useQuery({
     queryKey: ['streets'],
     queryFn: getStreets,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const { data: areas } = useQuery({
@@ -370,9 +376,27 @@ export default function StreetsPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('streets.noPermission') || 'You do not have permission to view streets.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   // Filter streets
   const filteredStreets = streets?.filter((street) => {

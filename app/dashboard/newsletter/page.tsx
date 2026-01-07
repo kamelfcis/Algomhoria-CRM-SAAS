@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, Mail, MailCheck, MailX } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { useToast } from '@/hooks/use-toast'
 import {
   Dialog,
@@ -40,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const subscriberSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -210,9 +212,13 @@ export default function NewsletterPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [subscriberToDelete, setSubscriberToDelete] = useState<NewsletterSubscriber | null>(null)
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('newsletter')
+
   const { data: subscribers, isLoading } = useQuery({
     queryKey: ['newsletter-subscribers'],
     queryFn: getSubscribers,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const createMutation = useMutation({
@@ -376,9 +382,27 @@ export default function NewsletterPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('newsletter.noPermission') || 'You do not have permission to view newsletter subscribers.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   // Filter subscribers
   const filteredSubscribers = subscribers?.filter((subscriber) => {

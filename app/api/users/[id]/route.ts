@@ -2,11 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import * as z from 'zod'
+import { isAdmin } from '@/lib/utils/permission-helpers'
 
 const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
   phone_number: z.string().optional().nullable(),
-  role: z.enum(['admin', 'moderator', 'sales', 'user']).optional(),
+  role_ids: z.array(z.string().uuid()).optional(),
   status: z.enum(['active', 'inactive', 'suspended']).optional(),
 })
 
@@ -24,14 +25,9 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Check if user is admin
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (profile?.role !== 'admin') {
+    // Check if user is admin using user_roles
+    const userIsAdmin = await isAdmin(user.id)
+    if (!userIsAdmin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
@@ -39,13 +35,12 @@ export async function PATCH(
     const validatedData = updateUserSchema.parse(body)
 
     // Use admin client to update user
-    const adminClient = createAdminClient()
+    const adminClient = createAdminClient() as any
 
-    // Build update object
+    // Build update object (excluding role_ids which is handled separately)
     const updateData: Record<string, any> = {}
     if (validatedData.name !== undefined) updateData.name = validatedData.name
     if (validatedData.phone_number !== undefined) updateData.phone_number = validatedData.phone_number ?? null
-    if (validatedData.role !== undefined) updateData.role = validatedData.role
     if (validatedData.status !== undefined) updateData.status = validatedData.status
 
     // Update user in database
@@ -53,11 +48,40 @@ export async function PATCH(
       .from('users')
       .update(updateData)
       .eq('id', params.id)
-      .select()
+      .select('id, email, name, phone_number, status, author_image_url, created_at, updated_at')
       .single()
 
     if (dbError) {
       return NextResponse.json({ error: dbError.message }, { status: 400 })
+    }
+
+    // Handle role assignments if provided
+    if (validatedData.role_ids !== undefined) {
+      // Remove existing roles
+      await adminClient
+        .from('user_roles')
+        .delete()
+        .eq('user_id', params.id)
+
+      // Assign new roles
+      if (validatedData.role_ids.length > 0) {
+        const roleAssignments = validatedData.role_ids.map(roleId => ({
+          user_id: params.id,
+          role_id: roleId,
+          assigned_by: user.id,
+        }))
+
+        const { error: roleError } = await adminClient
+          .from('user_roles')
+          .insert(roleAssignments)
+
+        if (roleError) {
+          console.error('Failed to assign roles:', roleError)
+          return NextResponse.json({ 
+            error: `Failed to assign roles: ${roleError.message}` 
+          }, { status: 400 })
+        }
+      }
     }
 
     return NextResponse.json({ data: updatedUser }, { status: 200 })
@@ -83,14 +107,9 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Check if user is admin
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (profile?.role !== 'admin') {
+    // Check if user is admin using user_roles
+    const userIsAdmin = await isAdmin(user.id)
+    if (!userIsAdmin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 

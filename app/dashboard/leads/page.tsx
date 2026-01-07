@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Pencil, Trash2, ChevronDown, ChevronUp, X, Plus, Calendar, Clock, Grid3x3, List, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -156,11 +157,32 @@ async function getLeads() {
   if (assignedUserIds.length > 0) {
     const { data: usersData } = await supabase
       .from('users')
-      .select('id, name, email, role')
+      .select('id, name, email')
       .in('id', assignedUserIds)
     
     if (usersData) {
-      usersMap = usersData.reduce((acc: any, user: any) => {
+      // Fetch roles for each user
+      const usersWithRoles = await Promise.all(
+        usersData.map(async (user: any) => {
+          const { data: userRoles } = await supabase
+            .from('user_roles')
+            .select(`
+              role_id,
+              roles!inner(name, status)
+            `)
+            .eq('user_id', user.id)
+          
+          const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
+          const roleName = (activeRole as any)?.roles?.name || 'user'
+          
+          return {
+            ...user,
+            role: roleName,
+          }
+        })
+      )
+      
+      usersMap = usersWithRoles.reduce((acc: any, user: any) => {
         acc[user.id] = user
         return acc
       }, {})
@@ -176,14 +198,36 @@ async function getLeads() {
 
 async function getUsers() {
   const supabase = createClient()
-  const { data, error } = await supabase
+  const { data: users, error } = await supabase
     .from('users')
-    .select('id, name, email, role')
+    .select('id, name, email')
     .eq('status', 'active')
-    .in('role', ['admin', 'sales', 'moderator'])
-
-  if (error) throw error
-  return data
+  
+  if (error || !users) return []
+  
+  // Fetch roles and filter by role names
+  const usersWithRoles = await Promise.all(
+    users.map(async (user: any) => {
+      const { data: userRoles } = await supabase
+        .from('user_roles')
+        .select(`
+          role_id,
+          roles!inner(name, status)
+        `)
+        .eq('user_id', user.id)
+      
+      const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
+      const roleName = (activeRole as any)?.roles?.name || 'user'
+      
+      return {
+        ...user,
+        role: roleName,
+      }
+    })
+  )
+  
+  // Filter by allowed roles
+  return usersWithRoles.filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
 }
 
 async function updateLead(id: string, leadData: Partial<LeadUpdateForm>) {
@@ -391,11 +435,62 @@ async function createLeadActivity(activityData: {
   } as LeadActivity
 }
 
+async function updateLeadActivity(
+  activityId: string,
+  activityData: {
+    action?: string
+    result?: string
+    notes?: string
+    follow_up_date?: string | null
+  }
+) {
+  const supabase = createClient()
+
+  const updateData: any = {
+    action: activityData.action,
+    result: activityData.result || null,
+    notes: activityData.notes || null,
+    follow_up_date: activityData.follow_up_date || null,
+    updated_at: new Date().toISOString(),
+  }
+
+  const { data, error } = await supabase
+    .from('lead_activities')
+    .update(updateData)
+    .eq('id', activityId)
+    .select('*')
+    .single()
+
+  if (error) {
+    console.error('Error updating activity:', error)
+    throw error
+  }
+
+  return data as LeadActivity
+}
+
+async function deleteLeadActivity(activityId: string) {
+  const supabase = createClient()
+  
+  const { error } = await supabase
+    .from('lead_activities')
+    .delete()
+    .eq('id', activityId)
+
+  if (error) {
+    console.error('Error deleting activity:', error)
+    throw error
+  }
+}
+
 export default function LeadsPage() {
   const t = useTranslations()
   const { profile, user } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('leads')
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -405,10 +500,17 @@ export default function LeadsPage() {
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
+  
+  // Activity editing state
+  const [editingActivity, setEditingActivity] = useState<LeadActivity | null>(null)
+  const [activityToDelete, setActivityToDelete] = useState<LeadActivity | null>(null)
+  const [deleteActivityDialogOpen, setDeleteActivityDialogOpen] = useState(false)
+  const [isFormHighlighted, setIsFormHighlighted] = useState(false)
 
   const { data: leads, isLoading } = useQuery({
     queryKey: ['leads'],
     queryFn: getLeads,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const { data: users } = useQuery({
@@ -623,6 +725,7 @@ export default function LeadsPage() {
     formState: { errors: activityErrors },
     reset: activityReset,
     setValue: activitySetValue,
+    watch: activityWatch,
   } = useForm<ActivityForm>({
     resolver: zodResolver(activitySchema),
     defaultValues: {
@@ -632,6 +735,10 @@ export default function LeadsPage() {
       follow_up_date: '',
     },
   })
+
+  // Watch activity form values for controlled Select components
+  const activityAction = activityWatch('action')
+  const activityResult = activityWatch('result')
 
   // Get activities for expanded lead
   const { data: activities } = useQuery({
@@ -667,11 +774,137 @@ export default function LeadsPage() {
     },
   })
 
+  // Update activity mutation
+  const updateActivityMutation = useMutation({
+    mutationFn: (data: ActivityForm & { activityId: string }) =>
+      updateLeadActivity(data.activityId, {
+        action: data.action,
+        result: data.result,
+        notes: data.notes,
+        follow_up_date: data.follow_up_date,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lead-activities', expandedRowId] })
+      setEditingActivity(null)
+      activityReset()
+      toast({
+        title: t('common.success') || 'Success',
+        description: t('leads.activityUpdated') || 'Activity updated successfully',
+        variant: 'success',
+      })
+    },
+    onError: (error: any) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('leads.activityUpdateError') || 'Failed to update activity. Please try again.',
+        variant: 'destructive',
+      })
+    },
+  })
+
+  // Delete activity mutation
+  const deleteActivityMutation = useMutation({
+    mutationFn: (activityId: string) => deleteLeadActivity(activityId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['lead-activities', expandedRowId] })
+      setDeleteActivityDialogOpen(false)
+      setActivityToDelete(null)
+      toast({
+        title: t('common.success') || 'Success',
+        description: t('leads.activityDeleted') || 'Activity deleted successfully',
+        variant: 'success',
+      })
+    },
+    onError: (error: any) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('leads.activityDeleteError') || 'Failed to delete activity. Please try again.',
+        variant: 'destructive',
+      })
+    },
+  })
+
   const onActivitySubmit = useCallback((data: ActivityForm) => {
-    if (expandedRowId) {
-      activityMutation.mutate({ ...data, leadId: expandedRowId })
+    // Convert follow_up_date from datetime-local format to ISO string
+    // datetime-local gives us "YYYY-MM-DDTHH:mm" in local time
+    // We need to preserve the exact time the user selected
+    let processedData = { ...data }
+    if (data.follow_up_date) {
+      // Parse the datetime-local string (format: "YYYY-MM-DDTHH:mm")
+      // Create a Date object treating it as local time
+      const dateStr = data.follow_up_date
+      // new Date() with this format interprets it as local time
+      // We'll use it directly and let the database handle timezone conversion
+      // But we need to ensure it's in a proper format
+      const localDate = new Date(dateStr)
+      // Check if date is valid
+      if (!isNaN(localDate.getTime())) {
+        // Convert to ISO string - this will convert local time to UTC
+        // The database should store it in UTC and convert back when reading
+        processedData.follow_up_date = localDate.toISOString()
+      } else {
+        processedData.follow_up_date = null
+      }
     }
-  }, [expandedRowId, activityMutation])
+    
+    if (editingActivity) {
+      // Update existing activity
+      updateActivityMutation.mutate({ ...processedData, activityId: editingActivity.id })
+    } else if (expandedRowId) {
+      // Create new activity
+      activityMutation.mutate({ ...processedData, leadId: expandedRowId })
+    }
+  }, [expandedRowId, editingActivity, activityMutation, updateActivityMutation])
+
+  const handleEditActivity = useCallback((activity: LeadActivity) => {
+    setEditingActivity(activity)
+    activitySetValue('action', activity.action)
+    activitySetValue('result', activity.result || '')
+    activitySetValue('notes', activity.notes || '')
+    // Format follow_up_date for datetime-local input (YYYY-MM-DDTHH:mm)
+    // Use local time methods to preserve the time as displayed to the user
+    if (activity.follow_up_date) {
+      const date = new Date(activity.follow_up_date)
+      // Format as YYYY-MM-DDTHH:mm using local time components
+      const year = date.getFullYear()
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const day = String(date.getDate()).padStart(2, '0')
+      const hours = String(date.getHours()).padStart(2, '0')
+      const minutes = String(date.getMinutes()).padStart(2, '0')
+      const formattedDate = `${year}-${month}-${day}T${hours}:${minutes}`
+      activitySetValue('follow_up_date', formattedDate)
+    } else {
+      activitySetValue('follow_up_date', '')
+    }
+    
+    // Scroll to the activity form and add gold shine effect
+    setTimeout(() => {
+      const formElement = document.getElementById('activity-form')
+      if (formElement) {
+        formElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        // Trigger gold shine animation
+        setIsFormHighlighted(true)
+        // Remove highlight after animation completes
+        setTimeout(() => setIsFormHighlighted(false), 2000)
+      }
+    }, 100)
+  }, [activitySetValue])
+
+  const handleCancelEditActivity = useCallback(() => {
+    setEditingActivity(null)
+    activityReset()
+  }, [activityReset])
+
+  const handleDeleteActivity = useCallback((activity: LeadActivity) => {
+    setActivityToDelete(activity)
+    setDeleteActivityDialogOpen(true)
+  }, [])
+
+  const confirmDeleteActivity = useCallback(() => {
+    if (activityToDelete) {
+      deleteActivityMutation.mutate(activityToDelete.id)
+    }
+  }, [activityToDelete, deleteActivityMutation])
 
   const handleToggleExpand = useCallback((lead: Lead) => {
     if (expandedRowId === lead.id) {
@@ -704,45 +937,14 @@ export default function LeadsPage() {
     }
   }, [leadToDelete, deleteMutation])
 
-  const canCreate = useMemo(() => profile?.role === 'admin' || profile?.role === 'sales', [profile?.role])
-  const canEdit = useMemo(() => profile?.role === 'admin' || profile?.role === 'moderator' || profile?.role === 'sales', [profile?.role])
-  const canDelete = useMemo(() => profile?.role === 'admin', [profile?.role])
-  const isSales = useMemo(() => profile?.role === 'sales', [profile?.role])
-
-  // Filter and search leads - memoized for performance
-  const filteredLeads = useMemo(() => {
-    if (!leads) return []
-    
-    return leads.filter((lead: any) => {
-      // Sales users can only see leads assigned to them
-      if (isSales && lead.assigned_to !== profile?.id) {
-        return false
-      }
-      
-      if (statusFilter !== 'all' && lead.status !== statusFilter) return false
-      if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
-      
-      // Filter by assigned user (admin only)
-      if (profile?.role === 'admin' && assignedToFilter !== 'all') {
-        if (assignedToFilter === 'unassigned') {
-          if (lead.assigned_to !== null) return false
-        } else {
-          if (lead.assigned_to !== assignedToFilter) return false
-        }
-      }
-      
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase()
-        if (
-          !lead.name.toLowerCase().includes(query) &&
-          !lead.phone_number.toLowerCase().includes(query) &&
-          !(lead.email?.toLowerCase().includes(query)) &&
-          !lead.message.toLowerCase().includes(query)
-        ) return false
-      }
-      return true
-    })
-  }, [leads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery])
+  // Check if user has sales role (for filtering purposes)
+  // Sales users have create/edit permissions but NOT delete permissions
+  // Admins have all permissions including delete, so they should see all leads
+  const isSales = useMemo(() => {
+    // If user has delete permissions, they're an admin and should see all leads
+    // Only apply sales filter if user has create/edit but NOT delete permissions
+    return (canCreate || canEdit) && !canDelete
+  }, [canCreate, canEdit, canDelete])
 
   // Memoized color functions
   const getPriorityColor = useCallback((priority: string) => {
@@ -772,6 +974,41 @@ export default function LeadsPage() {
         return 'text-gray-600 bg-gray-50 dark:text-gray-400 dark:bg-gray-950'
     }
   }, [])
+
+  // Filter and search leads - memoized for performance
+  const filteredLeads = useMemo(() => {
+    if (!leads) return []
+    
+    return leads.filter((lead: any) => {
+      // Sales users can only see leads assigned to them
+      if (isSales && lead.assigned_to !== profile?.id) {
+        return false
+      }
+      
+      if (statusFilter !== 'all' && lead.status !== statusFilter) return false
+      if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
+      
+      // Filter by assigned user (admin only)
+      if (canEdit && assignedToFilter !== 'all') {
+        if (assignedToFilter === 'unassigned') {
+          if (lead.assigned_to !== null) return false
+        } else {
+          if (lead.assigned_to !== assignedToFilter) return false
+        }
+      }
+      
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase()
+        if (
+          !lead.name.toLowerCase().includes(query) &&
+          !lead.phone_number.toLowerCase().includes(query) &&
+          !(lead.email?.toLowerCase().includes(query)) &&
+          !lead.message.toLowerCase().includes(query)
+        ) return false
+      }
+      return true
+    })
+  }, [leads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
 
   // Memoized columns definition
   const columns = useMemo(() => [
@@ -857,12 +1094,30 @@ export default function LeadsPage() {
     const startIndex = (currentPage - 1) * itemsPerPage
     const endIndex = startIndex + itemsPerPage
     return filteredLeads.slice(startIndex, endIndex)
-  }, [filteredLeads, currentPage, itemsPerPage])
+  }, [filteredLeads, currentPage])
   
   const totalPages = Math.ceil(filteredLeads.length / itemsPerPage)
-
-  if (isLoading) {
-    return <PageSkeleton showHeader showActions={false} showTable tableRows={8} />
+  
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('leads.noPermission') || 'You do not have permission to view leads.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -925,7 +1180,7 @@ export default function LeadsPage() {
               </Select>
             </div>
 
-            {profile?.role === 'admin' && (
+            {canEdit && (
               <div className="space-y-2 w-full sm:w-auto min-w-[180px]">
                 <Label>Assigned To</Label>
                 <Select value={assignedToFilter} onValueChange={setAssignedToFilter}>
@@ -1261,7 +1516,7 @@ export default function LeadsPage() {
                             const value = lead[column.key as keyof Lead]
                             return (
                               <TableCell key={String(column.key)} className="whitespace-nowrap">
-                                {column.render ? column.render(value, lead) : String(value ?? '')}
+                                {column.render ? column.render(value as any, lead) : String(value ?? '')}
                               </TableCell>
                             )
                           })}
@@ -1533,11 +1788,21 @@ export default function LeadsPage() {
                                 {/* Activities Section */}
                                 <div className="space-y-4">
                                   {/* New Activity Form */}
-                                  <Card>
+                                  <Card 
+                                    id="activity-form"
+                                    className={cn(
+                                      "transition-all duration-500",
+                                      isFormHighlighted && "ring-2 ring-gold shadow-[0_0_30px_rgba(250,199,8,0.6)] animate-pulse"
+                                    )}
+                                    style={isFormHighlighted ? {
+                                      boxShadow: '0 0 30px rgba(250, 199, 8, 0.6), 0 0 60px rgba(250, 199, 8, 0.3), inset 0 0 20px rgba(250, 199, 8, 0.1)',
+                                      borderColor: 'rgba(250, 199, 8, 0.8)',
+                                    } : {}}
+                                  >
                                     <CardHeader>
                                       <CardTitle className="text-sm flex items-center gap-2">
                                         <Plus className="h-4 w-4" />
-                                        {t('leads.newActivity') || 'New activity'}
+                                        {editingActivity ? (t('leads.editActivity') || 'Edit activity') : (t('leads.newActivity') || 'New activity')}
                                       </CardTitle>
                                     </CardHeader>
                                     <CardContent>
@@ -1547,7 +1812,7 @@ export default function LeadsPage() {
                                             <Label htmlFor={`activity-action-${lead.id}`}>{t('leads.action') || 'Action'} *</Label>
                                             <Select
                                               onValueChange={(value) => activitySetValue('action', value as any)}
-                                              defaultValue="call"
+                                              value={activityAction}
                                               disabled={activityMutation.isPending}
                                             >
                                               <SelectTrigger id={`activity-action-${lead.id}`}>
@@ -1571,7 +1836,7 @@ export default function LeadsPage() {
                                             <Label htmlFor={`activity-result-${lead.id}`}>{t('leads.result') || 'Result'}</Label>
                                             <Select
                                               onValueChange={(value) => activitySetValue('result', value === 'none' ? '' : value)}
-                                              defaultValue="none"
+                                              value={activityResult || 'none'}
                                               disabled={activityMutation.isPending}
                                             >
                                               <SelectTrigger id={`activity-result-${lead.id}`}>
@@ -1610,12 +1875,26 @@ export default function LeadsPage() {
                                           />
                                         </div>
 
-                                        <div className="flex justify-end">
+                                        <div className="flex justify-end gap-2">
+                                          {editingActivity && (
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              onClick={handleCancelEditActivity}
+                                              disabled={updateActivityMutation.isPending}
+                                            >
+                                              {t('common.cancel') || 'Cancel'}
+                                            </Button>
+                                          )}
                                           <Button
                                             type="submit"
-                                            disabled={activityMutation.isPending}
+                                            disabled={activityMutation.isPending || updateActivityMutation.isPending}
                                           >
-                                            {activityMutation.isPending ? t('common.loading') || 'Saving...' : t('common.save') || 'SAVE'}
+                                            {(activityMutation.isPending || updateActivityMutation.isPending) 
+                                              ? t('common.loading') || 'Saving...' 
+                                              : editingActivity 
+                                                ? t('common.update') || 'Update'
+                                                : t('common.save') || 'Save'}
                                           </Button>
                                         </div>
                                       </form>
@@ -1636,7 +1915,10 @@ export default function LeadsPage() {
                                           {activities.map((activity) => (
                                             <div
                                               key={activity.id}
-                                              className="p-3 sm:p-4 rounded-lg border bg-muted/30 space-y-2 sm:space-y-3"
+                                              className={cn(
+                                                "p-3 sm:p-4 rounded-lg border bg-muted/30 space-y-2 sm:space-y-3",
+                                                editingActivity?.id === activity.id && "ring-2 ring-primary border-primary"
+                                              )}
                                             >
                                               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
                                                 <div className="flex-1 min-w-0">
@@ -1653,6 +1935,29 @@ export default function LeadsPage() {
                                                     <span className="px-2 py-1 rounded text-xs font-medium bg-secondary text-secondary-foreground capitalize whitespace-nowrap">
                                                       {t(`leads.resultTypes.${activity.result}` as any) || activity.result.replace('_', ' ')}
                                                     </span>
+                                                  )}
+                                                  {/* Edit and Delete buttons */}
+                                                  {canEdit && (
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-6 w-6"
+                                                      onClick={() => handleEditActivity(activity)}
+                                                      title={t('common.edit') || 'Edit'}
+                                                    >
+                                                      <Pencil className="h-3 w-3" />
+                                                    </Button>
+                                                  )}
+                                                  {canDelete && (
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-6 w-6 text-destructive hover:text-destructive"
+                                                      onClick={() => handleDeleteActivity(activity)}
+                                                      title={t('common.delete') || 'Delete'}
+                                                    >
+                                                      <Trash2 className="h-3 w-3" />
+                                                    </Button>
                                                   )}
                                                 </div>
                                               </div>
@@ -2026,11 +2331,21 @@ export default function LeadsPage() {
                               {/* Activities Section */}
                               <div className="space-y-4">
                                 {/* New Activity Form */}
-                                <Card>
+                                <Card 
+                                  id="activity-form"
+                                  className={cn(
+                                    "transition-all duration-500",
+                                    isFormHighlighted && "ring-2 ring-gold shadow-[0_0_30px_rgba(250,199,8,0.6)] animate-pulse"
+                                  )}
+                                  style={isFormHighlighted ? {
+                                    boxShadow: '0 0 30px rgba(250, 199, 8, 0.6), 0 0 60px rgba(250, 199, 8, 0.3), inset 0 0 20px rgba(250, 199, 8, 0.1)',
+                                    borderColor: 'rgba(250, 199, 8, 0.8)',
+                                  } : {}}
+                                >
                                   <CardHeader>
                                     <CardTitle className="text-sm flex items-center gap-2">
                                       <Plus className="h-4 w-4" />
-                                      {t('leads.newActivity') || 'New activity'}
+                                      {editingActivity ? (t('leads.editActivity') || 'Edit activity') : (t('leads.newActivity') || 'New activity')}
                                     </CardTitle>
                                   </CardHeader>
                                   <CardContent>
@@ -2040,19 +2355,19 @@ export default function LeadsPage() {
                                           <Label htmlFor={`activity-action-${lead.id}`}>{t('leads.action') || 'Action'} *</Label>
                                           <Select
                                             onValueChange={(value) => activitySetValue('action', value as any)}
-                                            defaultValue="call"
+                                            value={activityAction}
                                             disabled={activityMutation.isPending}
                                           >
                                             <SelectTrigger id={`activity-action-${lead.id}`}>
                                               <SelectValue placeholder="Choose" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                              <SelectItem value="call">Call</SelectItem>
-                                              <SelectItem value="meeting">Meeting</SelectItem>
-                                              <SelectItem value="site_show">Site show</SelectItem>
-                                              <SelectItem value="managerial_action">Managerial action</SelectItem>
-                                              <SelectItem value="end">End</SelectItem>
-                                              <SelectItem value="message">Message</SelectItem>
+                                              <SelectItem value="call">{t('leads.actionTypes.call') || 'Call'}</SelectItem>
+                                              <SelectItem value="meeting">{t('leads.actionTypes.meeting') || 'Meeting'}</SelectItem>
+                                              <SelectItem value="site_show">{t('leads.actionTypes.site_show') || 'Site Show'}</SelectItem>
+                                              <SelectItem value="managerial_action">{t('leads.actionTypes.managerial_action') || 'Managerial Action'}</SelectItem>
+                                              <SelectItem value="end">{t('leads.actionTypes.end') || 'End'}</SelectItem>
+                                              <SelectItem value="message">{t('leads.actionTypes.message') || 'Message'}</SelectItem>
                                             </SelectContent>
                                           </Select>
                                           {activityErrors.action && (
@@ -2064,19 +2379,19 @@ export default function LeadsPage() {
                                           <Label htmlFor={`activity-result-${lead.id}`}>{t('leads.result') || 'Result'}</Label>
                                           <Select
                                             onValueChange={(value) => activitySetValue('result', value === 'none' ? '' : value)}
-                                            defaultValue="none"
+                                            value={activityResult || 'none'}
                                             disabled={activityMutation.isPending}
                                           >
                                             <SelectTrigger id={`activity-result-${lead.id}`}>
                                               <SelectValue placeholder="Choose" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                              <SelectItem value="none">Choose</SelectItem>
-                                              <SelectItem value="successful">Successful</SelectItem>
-                                              <SelectItem value="no_answer">No Answer</SelectItem>
-                                              <SelectItem value="busy">Busy</SelectItem>
-                                              <SelectItem value="follow_up">Follow Up</SelectItem>
-                                              <SelectItem value="cancelled">Cancelled</SelectItem>
+                                              <SelectItem value="none">{t('leads.result') || 'Choose'}</SelectItem>
+                                              <SelectItem value="successful">{t('leads.resultTypes.successful') || 'Successful'}</SelectItem>
+                                              <SelectItem value="no_answer">{t('leads.resultTypes.no_answer') || 'No Answer'}</SelectItem>
+                                              <SelectItem value="busy">{t('leads.resultTypes.busy') || 'Busy'}</SelectItem>
+                                              <SelectItem value="follow_up">{t('leads.resultTypes.follow_up') || 'Follow Up'}</SelectItem>
+                                              <SelectItem value="cancelled">{t('leads.resultTypes.cancelled') || 'Cancelled'}</SelectItem>
                                             </SelectContent>
                                           </Select>
                                         </div>
@@ -2103,12 +2418,26 @@ export default function LeadsPage() {
                                         />
                                       </div>
 
-                                      <div className="flex justify-end">
+                                      <div className="flex justify-end gap-2">
+                                        {editingActivity && (
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={handleCancelEditActivity}
+                                            disabled={updateActivityMutation.isPending}
+                                          >
+                                            {t('common.cancel') || 'Cancel'}
+                                          </Button>
+                                        )}
                                         <Button
                                           type="submit"
-                                          disabled={activityMutation.isPending}
+                                          disabled={activityMutation.isPending || updateActivityMutation.isPending}
                                         >
-                                          {activityMutation.isPending ? t('common.loading') || 'Saving...' : t('common.save') || 'SAVE'}
+                                          {(activityMutation.isPending || updateActivityMutation.isPending) 
+                                            ? t('common.loading') || 'Saving...' 
+                                            : editingActivity 
+                                              ? t('common.update') || 'Update'
+                                              : t('common.save') || 'Save'}
                                         </Button>
                                       </div>
                                     </form>
@@ -2129,7 +2458,10 @@ export default function LeadsPage() {
                                         {activities.map((activity) => (
                                           <div
                                             key={activity.id}
-                                            className="p-3 sm:p-4 rounded-lg border bg-muted/30 space-y-2 sm:space-y-3"
+                                            className={cn(
+                                              "p-3 sm:p-4 rounded-lg border bg-muted/30 space-y-2 sm:space-y-3",
+                                              editingActivity?.id === activity.id && "ring-2 ring-primary border-primary"
+                                            )}
                                           >
                                             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3">
                                               <div className="flex-1 min-w-0">
@@ -2140,12 +2472,35 @@ export default function LeadsPage() {
                                               </div>
                                               <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                                                 <span className="px-2 py-1 rounded text-xs font-medium bg-primary/10 text-primary capitalize whitespace-nowrap">
-                                                  {activity.action.replace('_', ' ')}
+                                                  {t(`leads.actionTypes.${activity.action}` as any) || activity.action.replace('_', ' ')}
                                                 </span>
                                                 {activity.result && (
                                                   <span className="px-2 py-1 rounded text-xs font-medium bg-secondary text-secondary-foreground capitalize whitespace-nowrap">
-                                                    {activity.result.replace('_', ' ')}
+                                                    {t(`leads.resultTypes.${activity.result}` as any) || activity.result.replace('_', ' ')}
                                                   </span>
+                                                )}
+                                                {/* Edit and Delete buttons */}
+                                                {canEdit && (
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6"
+                                                    onClick={() => handleEditActivity(activity)}
+                                                    title={t('common.edit') || 'Edit'}
+                                                  >
+                                                    <Pencil className="h-3 w-3" />
+                                                  </Button>
+                                                )}
+                                                {canDelete && (
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-6 w-6 text-destructive hover:text-destructive"
+                                                    onClick={() => handleDeleteActivity(activity)}
+                                                    title={t('common.delete') || 'Delete'}
+                                                  >
+                                                    <Trash2 className="h-3 w-3" />
+                                                  </Button>
                                                 )}
                                               </div>
                                             </div>
@@ -2218,6 +2573,30 @@ export default function LeadsPage() {
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Activity Dialog */}
+      <AlertDialog open={deleteActivityDialogOpen} onOpenChange={setDeleteActivityDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('common.confirm') || 'Confirm Delete'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('leads.deleteActivity') || `Are you sure you want to delete this activity? This action cannot be undone.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setActivityToDelete(null)}>
+              {t('common.cancel') || 'Cancel'}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteActivity}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteActivityMutation.isPending}
+            >
+              {deleteActivityMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

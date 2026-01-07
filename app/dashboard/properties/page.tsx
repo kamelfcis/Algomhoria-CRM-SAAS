@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, Image as ImageIcon, Grid3x3, List, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   Dialog,
   DialogContent,
@@ -670,15 +671,19 @@ export default function PropertiesPage() {
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [propertyImages, setPropertyImages] = useState<Array<{ id: string; url: string; is_primary?: boolean; order_index?: number }>>([])
-  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards')
   const [propertyImageIndices, setPropertyImageIndices] = useState<{ [key: string]: number }>({})
+  
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('properties')
 
   const { data: properties, isLoading } = useQuery({
     queryKey: ['properties'],
     queryFn: getProperties,
+    enabled: canView, // Only fetch if user has view permission
   })
 
-  const { data: masterData } = useQuery({
+  const { data: masterData, refetch: refetchMasterData } = useQuery({
     queryKey: ['properties-master-data'],
     queryFn: getMasterData,
   })
@@ -811,6 +816,7 @@ export default function PropertiesPage() {
   const isFeatured = watch('is_featured')
   const isRented = watch('is_rented')
   const isSold = watch('is_sold')
+  const selectedStatus = watch('status')
 
   const onSubmit = (data: PropertyForm) => {
     const submitData = {
@@ -837,6 +843,8 @@ export default function PropertiesPage() {
 
   const handleEdit = async (property: any) => {
     setEditingProperty(property)
+    // Refresh all dropdown lists
+    refetchMasterData()
     // Code is read-only, so we don't set it in the form
     setValue('title_ar', property.title_ar)
     
@@ -898,11 +906,7 @@ export default function PropertiesPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'sales'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
-
-  // Query to get images count for all properties
+  // Query to get images count for all properties - MUST be before any conditional returns
   const { data: allPropertyImages } = useQuery({
     queryKey: ['all-property-images'],
     queryFn: async () => {
@@ -920,8 +924,30 @@ export default function PropertiesPage() {
       })
       return counts
     },
-    enabled: !!properties && !isLoading,
+    enabled: !!properties && !isLoading && canView,
   })
+
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('properties.noPermission') || 'You do not have permission to view properties.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   if (isLoading || !masterData) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
@@ -996,6 +1022,7 @@ export default function PropertiesPage() {
             setSelectedStreet('none')
             setSelectedFacilities([])
             setSelectedServices([])
+            refetchMasterData() // Refresh all dropdown lists
             setIsDialogOpen(true)
           }}>
             <Plus className="mr-2 h-4 w-4" />
@@ -1142,21 +1169,21 @@ export default function PropertiesPage() {
                 <Label htmlFor="status">{t('properties.status')}</Label>
                 <Select
                   onValueChange={(value) => setValue('status', value as any)}
-                  defaultValue={editingProperty?.status || 'pending'}
+                  value={selectedStatus || 'pending'}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                    <SelectItem value="deleted">Deleted</SelectItem>
-                    <SelectItem value="expired">Expired</SelectItem>
-                    <SelectItem value="rented">Rented</SelectItem>
-                    <SelectItem value="sold">Sold</SelectItem>
+                    <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
+                    <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
+                    <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
+                    <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
+                    <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
+                    <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
+                    <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
+                    <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

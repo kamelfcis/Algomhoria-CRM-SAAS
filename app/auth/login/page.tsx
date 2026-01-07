@@ -8,6 +8,7 @@ import * as z from 'zod'
 import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissionsStore } from '@/store/permissions-store'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import type { Database } from '@/lib/supabase/types'
 
@@ -55,6 +56,7 @@ export default function LoginPage() {
   const router = useRouter()
   const t = useTranslations()
   const { setUser, setProfile, setLoading } = useAuthStore()
+  const { fetchPermissions } = usePermissionsStore()
   const { language, setLanguage } = useLanguageStore()
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -96,10 +98,10 @@ export default function LoginPage() {
         return
       }
 
-      // Fetch user profile from database
+      // Fetch user profile from database (excluding role column)
       const { data: profile, error: profileError } = await supabase
         .from('users')
-        .select('*')
+        .select('id, email, name, phone_number, status, author_image_url, created_at, updated_at')
         .eq('email', data.email)
         .single()
 
@@ -109,7 +111,7 @@ export default function LoginPage() {
         return
       }
 
-      const userProfile = profile as UserProfile
+      const userProfile = profile as any
 
       // Check user status - prevent inactive or suspended users from logging in
       if (userProfile.status === 'inactive' || userProfile.status === 'suspended') {
@@ -121,21 +123,37 @@ export default function LoginPage() {
         return
       }
 
+      // Fetch user roles
+      const { data: userRoles } = await (supabase as any)
+        .from('user_roles')
+        .select(`
+          role_id,
+          roles!inner(name, status)
+        `)
+        .eq('user_id', userProfile.id)
+
+      // Get the first active role (or default to 'user')
+      const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
+      const roleName = (activeRole as any)?.roles?.name || 'user'
+
       // Update auth store
       setUser(authData.user)
       setProfile({
         id: userProfile.id,
         email: userProfile.email,
         name: userProfile.name,
-        role: userProfile.role as any,
+        role: roleName as any,
         status: userProfile.status,
         phone_number: userProfile.phone_number,
         author_image_url: userProfile.author_image_url,
       })
       setLoading(false)
 
-      // Log login activity
-      await ActivityLogger.login(authData.user.id, authData.user.email || '')
+      // Pre-fetch permissions immediately after login for instant page loads
+      fetchPermissions(userProfile.id)
+
+      // Log login activity (don't await - let it run in background)
+      ActivityLogger.login(authData.user.id, authData.user.email || '')
 
       // Redirect to dashboard
       router.push('/dashboard')

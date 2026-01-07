@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, Eye, Trash } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   Dialog,
   DialogContent,
@@ -154,10 +155,14 @@ export default function PostsPage() {
   const [editingPost, setEditingPost] = useState<Post | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [postToDelete, setPostToDelete] = useState<Post | null>(null)
+  
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('posts')
 
   const { data: posts, isLoading } = useQuery({
     queryKey: ['posts'],
     queryFn: getPosts,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const { data: categories } = useQuery({
@@ -305,12 +310,26 @@ export default function PostsPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'sales'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
-
-  if (isLoading) {
+  if (isLoading || isCheckingPermissions) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('posts.noPermission') || 'You do not have permission to view posts.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   const columns = [

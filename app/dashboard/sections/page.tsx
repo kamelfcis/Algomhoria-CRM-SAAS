@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { useToast } from '@/hooks/use-toast'
 import {
@@ -41,6 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const sectionSchema = z.object({
   name_ar: z.string().min(1, 'Arabic name is required'),
@@ -127,9 +129,13 @@ export default function SectionsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [sectionToDelete, setSectionToDelete] = useState<Section | null>(null)
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('sections')
+
   const { data: sections, isLoading } = useQuery({
     queryKey: ['sections'],
     queryFn: getSections,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const createMutation = useMutation({
@@ -321,9 +327,27 @@ export default function SectionsPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('sections.noPermission') || 'You do not have permission to view sections.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   const columns = [
     {

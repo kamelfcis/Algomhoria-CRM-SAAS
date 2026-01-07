@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { Pencil, Trash2, Calendar, DollarSign } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
+import { ActivityLogger } from '@/lib/utils/activity-logger'
 import {
   Dialog,
   DialogContent,
@@ -39,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const bookingUpdateSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'cancelled', 'completed']),
@@ -110,9 +113,13 @@ export default function BookingsPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [bookingToDelete, setBookingToDelete] = useState<PropertyBooking | null>(null)
 
+  // Check permissions
+  const { canView, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('bookings')
+
   const { data: bookings, isLoading } = useQuery({
     queryKey: ['property-bookings'],
     queryFn: getBookings,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const updateMutation = useMutation({
@@ -192,8 +199,27 @@ export default function BookingsPage() {
     }
   }
 
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator'
-  const canDelete = profile?.role === 'admin'
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={false} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('bookings.noPermission') || 'You do not have permission to view bookings.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   // Filter bookings
   const filteredBookings = bookings?.filter((booking) => {
@@ -531,7 +557,7 @@ export default function BookingsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t('common.confirm') || 'Confirm Delete'}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t('bookings.deleteBooking') || `Are you sure you want to delete booking for "${bookingToDelete?.property_title || bookingToDelete?.customer_name || 'Untitled Booking'}"? This action cannot be undone.`}
+              {t('bookings.deleteBooking') || `Are you sure you want to delete booking for "${bookingToDelete?.properties?.title_en || bookingToDelete?.customer_name || 'Untitled Booking'}"? This action cannot be undone.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

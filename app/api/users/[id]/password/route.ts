@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import * as z from 'zod'
+import { isAdmin } from '@/lib/utils/permission-helpers'
 
 const changePasswordSchema = z.object({
   newPassword: z.string().min(6, 'Password must be at least 6 characters'),
@@ -26,21 +27,15 @@ export async function PATCH(
     }
 
     // Check if user is admin or changing their own password
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    const isAdmin = profile?.role === 'admin'
+    const userIsAdmin = await isAdmin(user.id)
     const isOwnPassword = user.id === params.id
 
-    if (!isAdmin && !isOwnPassword) {
+    if (!userIsAdmin && !isOwnPassword) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const body = await request.json()
-    const validatedData = isAdmin && !isOwnPassword 
+    const validatedData = userIsAdmin && !isOwnPassword 
       ? resetPasswordSchema.parse(body)
       : changePasswordSchema.parse(body)
 

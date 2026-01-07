@@ -6,6 +6,7 @@ import { useTranslations } from '@/hooks/use-translations'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { Badge } from '@/components/ui/badge'
 import { User, FileText, Home, Users, Folder, MessageSquare, Settings, Trash2, Edit, Plus, LogIn, LogOut } from 'lucide-react'
 
@@ -35,15 +36,59 @@ async function getActivityLogs() {
     .select(`
       *,
       user:users (
+        id,
         name,
-        email,
-        role
+        email
       )
     `)
     .order('created_at', { ascending: false })
     .limit(1000) // Limit to last 1000 logs for performance
 
   if (error) throw error
+  
+  // Fetch roles for all users who have activity logs
+  const userIds = [...new Set((data || []).map((log: any) => log.user_id).filter(Boolean))]
+  
+  if (userIds.length > 0) {
+    // Fetch user roles for all users
+    const { data: userRolesData } = await supabase
+      .from('user_roles')
+      .select(`
+        user_id,
+        roles!inner(
+          name,
+          name_ar,
+          status
+        )
+      `)
+      .in('user_id', userIds)
+      .eq('roles.status', 'active')
+    
+    // Create a map of user_id to role names
+    const userRolesMap = new Map<string, string>()
+    if (userRolesData) {
+      userRolesData.forEach((ur: any) => {
+        if (!userRolesMap.has(ur.user_id)) {
+          // Get the first active role name (prefer Arabic if available)
+          const roleName = ur.roles?.name_ar || ur.roles?.name || 'user'
+          userRolesMap.set(ur.user_id, roleName)
+        }
+      })
+    }
+    
+    // Add roles to the activity logs
+    return (data || []).map((log: any) => {
+      const userRole = log.user_id ? userRolesMap.get(log.user_id) : null
+      return {
+        ...log,
+        user: log.user ? {
+          ...log.user,
+          role: userRole || 'user'
+        } : null
+      }
+    }) as ActivityLog[]
+  }
+  
   return data as ActivityLog[]
 }
 
@@ -107,15 +152,23 @@ const getEntityIcon = (entityType: string) => {
 export default function ActivityLogsPage() {
   const t = useTranslations()
   const { profile } = useAuthStore()
+  
+  // Check permissions
+  const { canView, isLoading: isCheckingPermissions } = usePermissions('activity_logs')
 
   const { data: logs, isLoading } = useQuery({
     queryKey: ['activity-logs'],
     queryFn: getActivityLogs,
+    enabled: canView, // Only fetch if user has view permission
     refetchInterval: 30000, // Refetch every 30 seconds for real-time updates
   })
 
-  // Only admins can view activity logs
-  if (profile?.role !== 'admin') {
+  if (isLoading || isCheckingPermissions) {
+    return <div>Loading...</div>
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">

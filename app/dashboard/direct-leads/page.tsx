@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Pencil, Trash2, ChevronDown, ChevronUp, X, Plus, Calendar, Clock, Grid3x3, List, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -133,7 +134,7 @@ async function getDirectLeads() {
   
   const { data: leadsData, error: leadsError } = await supabase
     .from('direct_leads')
-    .select('*, assigned_user:users!direct_leads_assigned_to_fkey(id, name, email, role)')
+    .select('*, assigned_user:users!direct_leads_assigned_to_fkey(id, name, email)')
     .order('created_at', { ascending: false })
 
   if (leadsError) {
@@ -141,19 +142,68 @@ async function getDirectLeads() {
     throw leadsError
   }
 
-  return (leadsData || []) as DirectLead[]
+  // Fetch roles for assigned users
+  const leadsWithRoles = await Promise.all(
+    (leadsData || []).map(async (lead: any) => {
+      if (lead.assigned_user?.id) {
+        const { data: userRoles } = await supabase
+          .from('user_roles')
+          .select(`
+            role_id,
+            roles!inner(name, status)
+          `)
+          .eq('user_id', lead.assigned_user.id)
+        
+        const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
+        const roleName = (activeRole as any)?.roles?.name || 'user'
+        
+        return {
+          ...lead,
+          assigned_user: {
+            ...lead.assigned_user,
+            role: roleName,
+          },
+        }
+      }
+      return lead
+    })
+  )
+
+  return leadsWithRoles as DirectLead[]
 }
 
 async function getUsers() {
   const supabase = createClient()
-  const { data, error } = await supabase
+  const { data: users, error } = await supabase
     .from('users')
-    .select('id, name, email, role')
+    .select('id, name, email')
     .eq('status', 'active')
-    .in('role', ['admin', 'sales', 'moderator'])
-
-  if (error) throw error
-  return data
+  
+  if (error || !users) return []
+  
+  // Fetch roles and filter by role names
+  const usersWithRoles = await Promise.all(
+    users.map(async (user: any) => {
+      const { data: userRoles } = await supabase
+        .from('user_roles')
+        .select(`
+          role_id,
+          roles!inner(name, status)
+        `)
+        .eq('user_id', user.id)
+      
+      const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
+      const roleName = (activeRole as any)?.roles?.name || 'user'
+      
+      return {
+        ...user,
+        role: roleName,
+      }
+    })
+  )
+  
+  // Filter by allowed roles
+  return usersWithRoles.filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
 }
 
 async function updateDirectLead(id: string, leadData: Partial<DirectLeadUpdateForm>) {
@@ -370,9 +420,13 @@ export default function DirectLeadsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 20
 
+  // Check permissions
+  const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('direct_leads')
+
   const { data: directLeads, isLoading } = useQuery({
     queryKey: ['direct-leads'],
     queryFn: getDirectLeads,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const { data: users } = useQuery({
@@ -515,60 +569,14 @@ export default function DirectLeadsPage() {
     }
   }
 
-  const canCreate = profile?.role === 'admin'
-  const canEdit = profile?.role === 'admin' || profile?.role === 'moderator' || profile?.role === 'sales'
-  const canDelete = profile?.role === 'admin'
-  const isSales = useMemo(() => profile?.role === 'sales', [profile?.role])
-
-  // Filter and search leads - memoized for performance
-  const filteredLeads = useMemo(() => {
-    if (!directLeads) return []
-    
-    return directLeads.filter((lead: DirectLead) => {
-      // Sales users can only see leads assigned to them
-      if (isSales && lead.assigned_to !== profile?.id) {
-        return false
-      }
-      
-    if (statusFilter !== 'all' && lead.status !== statusFilter) return false
-    if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
-      
-      // Filter by assigned user (admin only)
-      if (profile?.role === 'admin' && assignedToFilter !== 'all') {
-        if (assignedToFilter === 'unassigned') {
-          if (lead.assigned_to !== null) return false
-        } else {
-          if (lead.assigned_to !== assignedToFilter) return false
-        }
-      }
-      
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase()
-        if (
-          !lead.name.toLowerCase().includes(query) &&
-          !lead.phone_number.toLowerCase().includes(query) &&
-          !(lead.email?.toLowerCase().includes(query)) &&
-          !(lead.message?.toLowerCase().includes(query)) &&
-          !(lead.source?.toLowerCase().includes(query))
-        ) return false
-      }
-    return true
-  })
-  }, [directLeads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery])
-
-  // Reset pagination when filters change
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [statusFilter, priorityFilter, assignedToFilter, searchQuery])
-
-  // Paginated leads
-  const paginatedLeads = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage
-    const endIndex = startIndex + itemsPerPage
-    return filteredLeads.slice(startIndex, endIndex)
-  }, [filteredLeads, currentPage, itemsPerPage])
-
-  const totalPages = Math.ceil(filteredLeads.length / itemsPerPage)
+  // Check if user has sales role (for filtering purposes)
+  // Sales users have create/edit permissions but NOT delete permissions
+  // Admins have all permissions including delete, so they should see all leads
+  const isSales = useMemo(() => {
+    // If user has delete permissions, they're an admin and should see all leads
+    // Only apply sales filter if user has create/edit but NOT delete permissions
+    return (canCreate || canEdit) && !canDelete
+  }, [canCreate, canEdit, canDelete])
 
   // Memoized color functions
   const getPriorityColor = useCallback((priority: string) => {
@@ -604,6 +612,42 @@ export default function DirectLeadsPage() {
         return 'text-gray-600 bg-gray-50 dark:text-gray-400 dark:bg-gray-950'
     }
   }, [])
+
+  // Filter and search leads - memoized for performance
+  const filteredLeads = useMemo(() => {
+    if (!directLeads) return []
+    
+    return directLeads.filter((lead: DirectLead) => {
+      // Sales users can only see leads assigned to them
+      if (isSales && lead.assigned_to !== profile?.id) {
+        return false
+      }
+      
+    if (statusFilter !== 'all' && lead.status !== statusFilter) return false
+    if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
+      
+      // Filter by assigned user (admin only)
+      if (canEdit && assignedToFilter !== 'all') {
+        if (assignedToFilter === 'unassigned') {
+          if (lead.assigned_to !== null) return false
+        } else {
+          if (lead.assigned_to !== assignedToFilter) return false
+        }
+      }
+      
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase()
+        if (
+          !lead.name.toLowerCase().includes(query) &&
+          !lead.phone_number.toLowerCase().includes(query) &&
+          !(lead.email?.toLowerCase().includes(query)) &&
+          !(lead.message?.toLowerCase().includes(query)) &&
+          !(lead.source?.toLowerCase().includes(query))
+        ) return false
+      }
+    return true
+  })
+  }, [directLeads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
 
   const columns = useMemo(() => [
     {
@@ -664,6 +708,20 @@ export default function DirectLeadsPage() {
     },
   ], [t, getPriorityColor, getStatusColor])
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [statusFilter, priorityFilter, assignedToFilter, searchQuery])
+
+  // Paginated leads
+  const paginatedLeads = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage
+    const endIndex = startIndex + itemsPerPage
+    return filteredLeads.slice(startIndex, endIndex)
+  }, [filteredLeads, currentPage])
+  
+  const totalPages = Math.ceil(filteredLeads.length / itemsPerPage)
+
   // Activity handling
   const { data: activities, refetch: refetchActivities } = useQuery({
     queryKey: ['direct-lead-activities', expandedRowId],
@@ -690,6 +748,28 @@ export default function DirectLeadsPage() {
       })
     },
   })
+  
+  if (isLoading || isCheckingPermissions) {
+    return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('directLeads.noPermission') || 'You do not have permission to view direct leads.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   const onActivitySubmit = (data: ActivityForm) => {
     if (expandedRowId) {
@@ -770,7 +850,7 @@ export default function DirectLeadsPage() {
               </Select>
             </div>
 
-            {profile?.role === 'admin' && (
+            {canEdit && (
               <div className="space-y-2 w-full sm:w-auto min-w-[180px]">
                 <Label>Assigned To</Label>
                 <Select value={assignedToFilter} onValueChange={setAssignedToFilter}>
@@ -950,7 +1030,7 @@ export default function DirectLeadsPage() {
                     </div>
                   </div>
 
-                  {profile?.role === 'admin' && (
+                  {canEdit && (
                     <div className="space-y-2">
                       <Label htmlFor="create-assigned">{t('directLeads.assignedTo') || 'Assigned To'}</Label>
                       <Select
@@ -1068,7 +1148,7 @@ export default function DirectLeadsPage() {
                                   const value = lead[column.key as keyof DirectLead]
                                   return (
                                     <TableCell key={String(column.key)} className="whitespace-nowrap">
-                                      {column.render ? column.render(value, lead) : String(value ?? '')}
+                                      {column.render ? column.render(value as any, lead) : String(value ?? '')}
                                     </TableCell>
                                   )
                                 })}
@@ -1228,7 +1308,7 @@ export default function DirectLeadsPage() {
                   </div>
                 </div>
 
-                                        {profile?.role === 'admin' && (
+                                        {canEdit && (
                 <div className="space-y-2">
                                             <Label htmlFor={`assigned-${lead.id}`}>{t('directLeads.assignedTo') || 'Assigned To'}</Label>
                   <Select

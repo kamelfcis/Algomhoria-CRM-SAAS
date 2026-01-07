@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, memo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -9,7 +9,6 @@ import { useAuthStore } from '@/store/auth-store'
 import { useThemeStore } from '@/store/theme-store'
 import { useLanguageStore } from '@/store/language-store'
 import { useTranslations } from '@/hooks/use-translations'
-import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { Button } from '@/components/ui/button'
 import { useUIStore } from '@/store/ui-store'
 import { cn } from '@/lib/utils'
@@ -53,7 +52,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-export function Navbar() {
+function NavbarComponent() {
   const router = useRouter()
   const t = useTranslations()
   const { user, profile, logout } = useAuthStore()
@@ -66,10 +65,8 @@ export function Navbar() {
   })
 
   useEffect(() => {
-    // Update immediately when theme changes
     setIsDark(getResolvedTheme() === 'dark')
     
-    // Watch for class changes on document.documentElement
     const observer = new MutationObserver(() => {
       setIsDark(document.documentElement.classList.contains('dark'))
     })
@@ -82,27 +79,20 @@ export function Navbar() {
     return () => observer.disconnect()
   }, [theme, getResolvedTheme])
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     try {
-      // Log logout activity before signing out
-      if (user && profile) {
-        await ActivityLogger.logout(user.id, profile.email || user.email || '')
-      }
       const supabase = createClient()
       await supabase.auth.signOut()
       logout()
       router.push('/auth/login')
-      // Clear any cached data
-      router.refresh()
     } catch (error) {
       console.error('Logout error:', error)
-      // Still proceed with logout even if logging fails
       const supabase = createClient()
       await supabase.auth.signOut()
       logout()
       router.push('/auth/login')
     }
-  }
+  }, [logout, router, user, profile])
 
   return (
     <div 
@@ -219,4 +209,7 @@ export function Navbar() {
     </div>
   )
 }
+
+// Memoize navbar to prevent unnecessary re-renders
+export const Navbar = memo(NavbarComponent)
 

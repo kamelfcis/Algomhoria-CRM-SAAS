@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, memo } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useTranslations } from '@/hooks/use-translations'
 import { useLanguageStore } from '@/store/language-store'
@@ -11,6 +11,7 @@ import { useAuthStore } from '@/store/auth-store'
 import { useUIStore } from '@/store/ui-store'
 import { X, ChevronDown, ChevronRight, ChevronLeft, Newspaper } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { usePermissionsStore } from '@/store/permissions-store'
 import {
   LayoutDashboard,
   Users,
@@ -46,6 +47,7 @@ type NavigationItem = {
   href?: string
   icon: any
   roles?: string[]
+  permissionResource?: string // Resource name for permission check (e.g., 'categories', 'posts')
   children?: NavigationItem[]
 }
 
@@ -54,11 +56,7 @@ const navigation: NavigationItem[] = [
     name: 'dashboard',
     href: '/dashboard',
     icon: LayoutDashboard,
-  },
-  {
-    name: 'users',
-    href: '/dashboard/users',
-    icon: Users,
+    permissionResource: 'dashboard',
   },
   {
     name: 'news',
@@ -68,16 +66,19 @@ const navigation: NavigationItem[] = [
         name: 'posts',
         href: '/dashboard/posts',
         icon: FileText,
+        permissionResource: 'posts',
       },
       {
         name: 'postGallery',
         href: '/dashboard/post-gallery',
         icon: ImageIcon,
+        permissionResource: 'post_gallery',
       },
       {
         name: 'categories',
         href: '/dashboard/categories',
         icon: Folder,
+        permissionResource: 'categories',
       },
     ],
   },
@@ -89,16 +90,19 @@ const navigation: NavigationItem[] = [
         name: 'featuredAreas',
         href: '/dashboard/featured-areas',
         icon: Star,
+        permissionResource: 'featured_areas',
       },
       {
         name: 'projectCategories',
         href: '/dashboard/project-categories',
         icon: FolderKanban,
+        permissionResource: 'project_categories',
       },
       {
         name: 'projects',
         href: '/dashboard/projects',
         icon: Briefcase,
+        permissionResource: 'projects',
       },
     ],
   },
@@ -110,51 +114,61 @@ const navigation: NavigationItem[] = [
         name: 'propertyFacilities',
         href: '/dashboard/property-facilities',
         icon: Wrench,
+        permissionResource: 'property_facilities',
       },
       {
         name: 'propertyViewTypes',
         href: '/dashboard/property-view-types',
         icon: Eye,
+        permissionResource: 'property_view_types',
       },
       {
         name: 'propertyServices',
         href: '/dashboard/property-services',
         icon: Wrench,
+        permissionResource: 'property_services',
       },
       {
         name: 'propertyFinishingTypes',
         href: '/dashboard/property-finishing-types',
         icon: Paintbrush,
+        permissionResource: 'property_finishing_types',
       },
       {
         name: 'propertyTypes',
         href: '/dashboard/property-types',
         icon: Building2,
+        permissionResource: 'property_types',
       },
       {
         name: 'paymentMethods',
         href: '/dashboard/payment-methods',
         icon: CreditCard,
+        permissionResource: 'payment_methods',
       },
       {
         name: 'governorates',
         href: '/dashboard/governorates',
         icon: Map,
+        permissionResource: 'governorates',
       },
       {
         name: 'areas',
         href: '/dashboard/areas',
         icon: MapPin,
+        permissionResource: 'areas',
       },
       {
         name: 'streets',
         href: '/dashboard/streets',
         icon: Navigation,
+        permissionResource: 'streets',
       },
       {
         name: 'sections',
         href: '/dashboard/sections',
         icon: Layers,
+        permissionResource: 'sections',
       },
     ],
   },
@@ -166,26 +180,31 @@ const navigation: NavigationItem[] = [
         name: 'properties',
         href: '/dashboard/properties',
         icon: Home,
+        permissionResource: 'properties',
       },
       {
         name: 'propertyOwners',
         href: '/dashboard/property-owners',
         icon: UserCircle,
+        permissionResource: 'property_owners',
       },
       {
         name: 'propertyImages',
         href: '/dashboard/property-images',
         icon: ImageIcon,
+        permissionResource: 'property_images',
       },
       {
         name: 'propertyComments',
         href: '/dashboard/property-comments',
         icon: MessageSquare,
+        permissionResource: 'property_comments',
       },
       {
         name: 'bookings',
         href: '/dashboard/bookings',
         icon: CalendarCheck,
+        permissionResource: 'bookings',
       },
     ],
   },
@@ -197,11 +216,13 @@ const navigation: NavigationItem[] = [
         name: 'leads',
         href: '/dashboard/leads',
         icon: MessageSquare,
+        permissionResource: 'leads',
       },
       {
         name: 'directLeads',
         href: '/dashboard/direct-leads',
         icon: MessageSquare,
+        permissionResource: 'direct_leads',
       },
     ],
   },
@@ -209,37 +230,77 @@ const navigation: NavigationItem[] = [
     name: 'sliders',
     href: '/dashboard/sliders',
     icon: ImageIcon,
+    permissionResource: 'sliders',
   },
   {
     name: 'teamUsers',
     href: '/dashboard/team-users',
     icon: UsersRound,
+    permissionResource: 'team_users',
   },
   {
     name: 'newsletter',
     href: '/dashboard/newsletter',
     icon: Mail,
-  },
-  {
-    name: 'roles',
-    href: '/dashboard/roles',
-    icon: Shield,
+    permissionResource: 'newsletter',
   },
   {
     name: 'settings',
-    href: '/dashboard/settings',
     icon: Settings,
-  },
-  {
-    name: 'activityLogs',
-    href: '/dashboard/activity-logs',
-    icon: History,
-    roles: ['admin'], // Only admins can see this
+    children: [
+      {
+        name: 'users',
+        href: '/dashboard/users',
+        icon: Users,
+        permissionResource: 'users',
+      },
+      {
+        name: 'usersPermissions',
+        href: '/dashboard/users-permissions',
+        icon: Shield,
+        roles: ['admin'], // Only admins can see this
+        permissionResource: 'users_permissions',
+      },
+      {
+        name: 'roles',
+        href: '/dashboard/roles',
+        icon: Shield,
+        permissionResource: 'roles',
+      },
+      {
+        name: 'generalSettings',
+        href: '/dashboard/settings',
+        icon: Settings,
+        permissionResource: 'settings',
+      },
+      {
+        name: 'activityLogs',
+        href: '/dashboard/activity-logs',
+        icon: History,
+        roles: ['admin'], // Only admins can see this
+        permissionResource: 'activity_logs',
+      },
+    ],
   },
 ]
 
-export function Sidebar() {
+// Collect all routes for prefetching
+const getAllRoutes = (items: NavigationItem[]): string[] => {
+  const routes: string[] = []
+  items.forEach(item => {
+    if (item.href) routes.push(item.href)
+    if (item.children) {
+      routes.push(...getAllRoutes(item.children))
+    }
+  })
+  return routes
+}
+
+const allRoutes = getAllRoutes(navigation)
+
+function SidebarComponent() {
   const pathname = usePathname()
+  const router = useRouter()
   const t = useTranslations()
   const { language } = useLanguageStore()
   const { profile } = useAuthStore()
@@ -249,6 +310,42 @@ export function Sidebar() {
     if (typeof window === 'undefined') return false
     return document.documentElement.classList.contains('dark')
   })
+
+  // Use centralized permissions store
+  const { 
+    fetchPermissions, 
+    hasAnyResourcePermission, 
+    isLoading: isLoadingPermissions, 
+    isAdmin,
+    userId: permissionsUserId 
+  } = usePermissionsStore()
+
+  // Fetch permissions when profile changes
+  useEffect(() => {
+    if (profile?.id && profile.id !== permissionsUserId) {
+      fetchPermissions(profile.id)
+    }
+  }, [profile?.id, fetchPermissions, permissionsUserId])
+
+  // Prefetch all dashboard routes on mount for instant navigation
+  useEffect(() => {
+    // Prefetch routes after a short delay to not block initial render
+    const timer = setTimeout(() => {
+      allRoutes.forEach(route => {
+        router.prefetch(route)
+      })
+    }, 100)
+    
+    return () => clearTimeout(timer)
+  }, [router])
+
+  // Check if user has any permissions for a resource
+  const hasPermissionForResource = useCallback((resource: string | undefined): boolean => {
+    if (!resource) return true // If no resource specified, show it (for backward compatibility)
+    if (isLoadingPermissions) return false // Don't show while loading
+    
+    return hasAnyResourcePermission(resource)
+  }, [hasAnyResourcePermission, isLoadingPermissions])
 
   useEffect(() => {
     // Watch for class changes on document.documentElement
@@ -264,18 +361,45 @@ export function Sidebar() {
     return () => observer.disconnect()
   }, [])
 
-  // Filter navigation based on user role - memoized for performance
+  // Filter navigation based on user permissions - memoized for performance
   const filteredNavigation = useMemo(() => {
     const filterNavigation = (items: NavigationItem[]): NavigationItem[] => {
       return items
         .map((item) => {
+          // Check role-based access (for backward compatibility)
           if (item.roles && profile) {
-            if (!item.roles.includes(profile.role)) {
+            // If item requires admin role, check if user is admin
+            if (item.roles.includes('admin')) {
+              if (!isAdmin) {
+                return null
+              }
+              // If user is admin and item is admin-only, always show it (bypass permission check)
+              if (isAdmin) {
+                // Continue to check children if any
+                if (item.children) {
+                  const filteredChildren = filterNavigation(item.children)
+                  if (filteredChildren.length === 0) {
+                    return null
+                  }
+                  return { ...item, children: filteredChildren }
+                }
+                return item
+              }
+            } else if (!item.roles.includes(profile.role)) {
               return null
             }
           }
+          
+          // Check permission-based access (skip if admin-only item and user is admin)
+          if (item.permissionResource && !(item.roles?.includes('admin') && isAdmin)) {
+            if (!hasPermissionForResource(item.permissionResource)) {
+              return null
+            }
+          }
+          
           if (item.children) {
             const filteredChildren = filterNavigation(item.children)
+            // Hide parent if no children are visible
             if (filteredChildren.length === 0) {
               return null
             }
@@ -286,11 +410,11 @@ export function Sidebar() {
         .filter((item): item is NavigationItem => item !== null)
     }
     return filterNavigation(navigation)
-  }, [profile])
+  }, [profile, hasPermissionForResource, isAdmin])
 
   // Auto-expand submenus when navigating to a page within them - optimized
   useEffect(() => {
-    const menuItems = ['news', 'masterData', 'projectsData', 'leads', 'propertyManagement']
+    const menuItems = ['news', 'masterData', 'projectsData', 'leads', 'propertyManagement', 'settings']
     
     setExpandedMenus((prev) => {
       const newSet = new Set(prev)
@@ -555,4 +679,7 @@ export function Sidebar() {
     </>
   )
 }
+
+// Memoize sidebar to prevent unnecessary re-renders
+export const Sidebar = memo(SidebarComponent)
 

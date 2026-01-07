@@ -7,6 +7,7 @@ import { useTranslations } from '@/hooks/use-translations'
 import { useThemeStore } from '@/store/theme-store'
 import { useLanguageStore } from '@/store/language-store'
 import { useAuthStore } from '@/store/auth-store'
+import { usePermissions } from '@/hooks/use-permissions'
 import { useToast } from '@/hooks/use-toast'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
@@ -99,9 +100,13 @@ export default function SettingsPage() {
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('profile')
 
+  // Check permissions
+  const { canView, canEdit } = usePermissions('settings')
+
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: getSettings,
+    enabled: canView, // Only fetch if user has view permission
   })
 
   const { toast } = useToast()
@@ -169,7 +174,29 @@ export default function SettingsPage() {
     updateMutation.mutate(data)
   }
 
-  const canManageSettings = profile?.role === 'admin'
+  const canManageSettings = canEdit
+  
+  if (isLoading) {
+    return <div>Loading...</div>
+  }
+  
+  // If user doesn't have view permission, show error message
+  if (!canView) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>{t('common.error') || 'Access Denied'}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-muted-foreground">
+              {t('settings.noPermission') || 'You do not have permission to view settings.'}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
