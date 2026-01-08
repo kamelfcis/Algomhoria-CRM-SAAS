@@ -277,7 +277,6 @@ const navigation: NavigationItem[] = [
         name: 'activityLogs',
         href: '/dashboard/activity-logs',
         icon: History,
-        roles: ['admin'], // Only admins can see this
         permissionResource: 'activity_logs',
       },
     ],
