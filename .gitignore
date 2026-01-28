@@ -52,3 +52,22 @@ logs
 # OS
 .DS_Store
 Thumbs.db
+
+# SQL files
+*.sql
+
+# Archive files
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+
+# Template source files (not needed in repo)
+WaterLand/
+
+# Build cache
+lib/.next/
+
+# Documentation files (optional - keep if needed)
+# *.md
