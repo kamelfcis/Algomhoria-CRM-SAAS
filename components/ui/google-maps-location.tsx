@@ -86,11 +86,28 @@ export function GoogleMapsLocation({
     // Create a unique callback name to avoid conflicts
     const callbackName = `initGoogleMaps_${Date.now()}`
     
-    // Set up the callback
+    // Set up the callback with error handling
     ;(window as any)[callbackName] = () => {
-      setIsLoaded(true)
-      // Clean up the callback
-      delete (window as any)[callbackName]
+      try {
+        if (window.google && window.google.maps && window.google.maps.places) {
+          setIsLoaded(true)
+        } else {
+          console.warn('Google Maps loaded but places library not available')
+          setIsLoaded(false)
+        }
+      } catch (error) {
+        console.error('Error in Google Maps callback:', error)
+        setIsLoaded(false)
+      } finally {
+        // Clean up the callback after a delay to ensure it's called
+        setTimeout(() => {
+          try {
+            delete (window as any)[callbackName]
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }, 1000)
+      }
     }
 
     // Load Google Maps script
@@ -103,65 +120,135 @@ export function GoogleMapsLocation({
     script.onerror = () => {
       console.error('Failed to load Google Maps script')
       setIsLoaded(false)
-      delete (window as any)[callbackName]
+      try {
+        delete (window as any)[callbackName]
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+
+    // Add timeout fallback in case callback never fires
+    const timeoutId = setTimeout(() => {
+      if (!window.google || !window.google.maps) {
+        console.warn('Google Maps callback timeout - checking if loaded anyway')
+        if (window.google && window.google.maps && window.google.maps.places) {
+          setIsLoaded(true)
+        }
+      }
+      try {
+        delete (window as any)[callbackName]
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }, 10000) // 10 second timeout
+
+    script.onload = () => {
+      clearTimeout(timeoutId)
     }
 
     document.head.appendChild(script)
+
+    return () => {
+      clearTimeout(timeoutId)
+      try {
+        delete (window as any)[callbackName]
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
 
     // No cleanup needed - we want to keep the script loaded for the entire app session
   }, [])
 
   // Initialize autocomplete
   React.useEffect(() => {
-    if (!isLoaded || !inputRef.current || !window.google) return
+    if (!isLoaded || !inputRef.current || !window.google || !window.google.maps || !window.google.maps.places) return
 
-    const autocompleteInstance = new window.google.maps.places.Autocomplete(inputRef.current, {
-      types: ['geocode', 'establishment'],
-      componentRestrictions: { country: 'eg' }, // Restrict to Egypt, remove if you want worldwide
-    })
+    // Suppress deprecation warnings - they're just warnings, not errors
+    const originalWarn = console.warn
+    let autocompleteInstance: any = null
 
-    autocompleteInstance.addListener('place_changed', () => {
-      const place = autocompleteInstance.getPlace()
-      
-      if (place.geometry) {
-        const lat = place.geometry.location.lat()
-        const lng = place.geometry.location.lng()
-        const address = place.formatted_address || place.name || locationText
-
-        onLocationChange(address, lat, lng)
-
-        // Update map
-        if (map) {
-          const location = new window.google.maps.LatLng(lat, lng)
-          map.setCenter(location)
-          map.setZoom(15)
-
-          if (marker) {
-            marker.setPosition(location)
-          } else {
-            const newMarker = new window.google.maps.Marker({
-              position: location,
-              map: map,
-              draggable: true,
-            })
-
-            newMarker.addListener('dragend', (e: any) => {
-              const newLat = e.latLng.lat()
-              const newLng = e.latLng.lng()
-              onLocationChange(locationText, newLat, newLng)
-            })
-
-            setMarker(newMarker)
-          }
+    try {
+      // Temporarily suppress deprecation warnings during initialization
+      console.warn = (...args: any[]) => {
+        // Suppress Google Maps deprecation warnings
+        if (args[0] && typeof args[0] === 'string' && args[0].includes('google.maps.places.Autocomplete')) {
+          return // Suppress this warning
         }
+        originalWarn.apply(console, args)
       }
-    })
 
-    setAutocomplete(autocompleteInstance)
+      autocompleteInstance = new window.google.maps.places.Autocomplete(inputRef.current, {
+        types: ['geocode', 'establishment'],
+        componentRestrictions: { country: 'eg' }, // Restrict to Egypt, remove if you want worldwide
+      })
+      
+      // Restore console.warn after successful initialization
+      console.warn = originalWarn
 
+      autocompleteInstance.addListener('place_changed', () => {
+        try {
+          const place = autocompleteInstance.getPlace()
+          
+          if (place.geometry) {
+            const lat = place.geometry.location.lat()
+            const lng = place.geometry.location.lng()
+            const address = place.formatted_address || place.name || locationText
+
+            onLocationChange(address, lat, lng)
+
+            // Update map
+            if (map) {
+              const location = new window.google.maps.LatLng(lat, lng)
+              map.setCenter(location)
+              map.setZoom(15)
+
+              if (marker) {
+                marker.setPosition(location)
+              } else {
+                const newMarker = new window.google.maps.Marker({
+                  position: location,
+                  map: map,
+                  draggable: true,
+                })
+
+                newMarker.addListener('dragend', (e: any) => {
+                  try {
+                    const newLat = e.latLng.lat()
+                    const newLng = e.latLng.lng()
+                    onLocationChange(locationText, newLat, newLng)
+                  } catch (error) {
+                    console.error('Error in marker dragend:', error)
+                  }
+                })
+
+                setMarker(newMarker)
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error in place_changed handler:', error)
+          // Don't block the form - allow it to continue
+        }
+      })
+
+      setAutocomplete(autocompleteInstance)
+    } catch (error) {
+      // Restore console.warn if error occurred
+      console.warn = originalWarn
+      // Silently handle autocomplete errors - don't block the form
+      // The form can still work without autocomplete
+      autocompleteInstance = null
+    }
+
+    // Return cleanup function outside of try-catch
     return () => {
-      if (autocompleteInstance) {
-        window.google.maps.event.clearInstanceListeners(autocompleteInstance)
+      try {
+        if (autocompleteInstance && window.google && window.google.maps && window.google.maps.event) {
+          window.google.maps.event.clearInstanceListeners(autocompleteInstance)
+        }
+      } catch (error) {
+        // Silently handle cleanup errors - don't block form
       }
     }
   }, [isLoaded, map, locationText, onLocationChange])
@@ -316,8 +403,26 @@ export function GoogleMapsLocation({
             // Allow manual typing
             onLocationChange(e.target.value, latitude || null, longitude || null)
           }}
+          onKeyDown={(e) => {
+            // Don't interfere with form submission
+            // If Enter is pressed, check if autocomplete dropdown is visible
+            if (e.key === 'Enter') {
+              const pacContainer = document.querySelector('.pac-container') as HTMLElement
+              // Only prevent default if dropdown is visible and has suggestions
+              if (pacContainer && pacContainer.style.display !== 'none') {
+                const pacItems = pacContainer.querySelectorAll('.pac-item')
+                if (pacItems.length > 0) {
+                  // Dropdown is open with suggestions, let autocomplete handle it
+                  return
+                }
+              }
+              // No dropdown or no suggestions, allow form to submit normally
+              // Don't prevent default - let the form handle Enter key
+            }
+          }}
           placeholder="Type or select a location..."
-          disabled={disabled || !isLoaded}
+          disabled={disabled}
+          autoComplete="off"
         />
         {!isLoaded && (
           <p className="text-xs text-muted-foreground">

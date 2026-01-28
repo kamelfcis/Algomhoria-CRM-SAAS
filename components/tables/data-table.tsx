@@ -608,32 +608,34 @@ export function DataTable<T extends Record<string, any>>({
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between">
+      {sortedData.length > 0 && (
+        <div className="flex items-center justify-between border-t pt-4">
           <div className="text-sm text-muted-foreground">
             {t('common.showing')} {startIndex + 1} - {Math.min(endIndex, sortedData.length)} {t('common.of')} {sortedData.length}
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handlePrevious}
-              disabled={currentPage === 1}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <div className="text-sm">
-              {t('common.page')} {currentPage} {t('common.of')} {totalPages}
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePrevious}
+                disabled={currentPage === 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="text-sm">
+                {t('common.page')} {currentPage} {t('common.of')} {totalPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleNext}
+                disabled={currentPage === totalPages}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleNext}
-              disabled={currentPage === totalPages}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
+          )}
         </div>
       )}
     </div>

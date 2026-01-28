@@ -1,0 +1,31 @@
+/* Temporary fix to ensure navbar is visible on desktop */
+/* This will be overridden by Bootstrap when it loads */
+
+@media (min-width: 992px) {
+  .navbar-collapse {
+    display: flex !important;
+    flex-basis: auto;
+    flex-grow: 1;
+    align-items: center;
+  }
+}
+
+/* Ensure navbar items are visible */
+.navbar-nav {
+  display: flex;
+  flex-direction: row;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item {
+  display: list-item;
+}
+
+.nav-link {
+  display: block;
+  padding: 0.5rem 1rem;
+  text-decoration: none;
+}
+

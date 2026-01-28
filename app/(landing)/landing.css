@@ -1,0 +1,12 @@
+/* Landing page specific styles - loaded separately to avoid conflicts with Tailwind */
+
+/* Ensure Bootstrap styles take precedence for landing pages */
+.landing-page * {
+  box-sizing: border-box;
+}
+
+/* Override any Tailwind resets that might interfere */
+.landing-page {
+  font-family: 'Montserrat', 'Open Sans', sans-serif;
+}
+

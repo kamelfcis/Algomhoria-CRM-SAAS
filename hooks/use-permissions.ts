@@ -36,6 +36,17 @@ export function usePermissions(resource: string): PermissionCheckResult {
       fetchPermissions(profile.id)
     }
   }, [profile?.id, fetchPermissions, userId])
+  
+  // Also refetch if cache is expired (to ensure permissions are fresh)
+  useEffect(() => {
+    if (profile?.id && lastFetched) {
+      const CACHE_DURATION = 2 * 60 * 1000 // 2 minutes
+      const cacheAge = Date.now() - lastFetched
+      if (cacheAge > CACHE_DURATION) {
+        fetchPermissions(profile.id)
+      }
+    }
+  }, [profile?.id, lastFetched, fetchPermissions])
 
   // If we have cached permissions, return them immediately (even if still "loading" a refresh)
   const hasCachedData = lastFetched !== null && permissions.size > 0

@@ -58,8 +58,8 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect dashboard routes
-  if (request.nextUrl.pathname.startsWith('/dashboard')) {
+  // Protect admin routes
+  if (request.nextUrl.pathname.startsWith('/admin')) {
     if (!user) {
       return NextResponse.redirect(new URL('/auth/login', request.url))
     }
@@ -68,7 +68,7 @@ export async function middleware(request: NextRequest) {
   // Redirect authenticated users away from login
   if (request.nextUrl.pathname.startsWith('/auth/login')) {
     if (user) {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+      return NextResponse.redirect(new URL('/admin', request.url))
     }
   }
 

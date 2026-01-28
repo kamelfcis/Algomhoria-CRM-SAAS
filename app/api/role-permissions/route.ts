@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import * as z from 'zod'
+import { rateLimit, rateLimitPresets } from '@/lib/utils/rate-limit'
 
 const assignPermissionSchema = z.object({
   role_id: z.string().uuid(),
@@ -91,6 +92,12 @@ async function checkAdmin(userId: string) {
 
 export async function GET(request: NextRequest) {
   try {
+    // Apply rate limiting (100 requests per minute for read operations)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.moderate)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
@@ -242,6 +249,12 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Apply rate limiting (60 requests per minute for write operations)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.default)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 
@@ -261,49 +274,110 @@ export async function POST(request: NextRequest) {
       const validatedData = bulkAssignSchema.parse(body)
       const adminClient = createAdminClient() as any
 
-      // First, delete all existing permissions for this role to avoid duplicates
-      const { error: deleteError } = await adminClient
-        .from('role_permissions')
-        .delete()
-        .eq('role_id', validatedData.role_id)
-
-      if (deleteError) {
-        console.error('Error deleting existing permissions:', deleteError)
-        return NextResponse.json({ 
-          error: deleteError.message || 'Failed to remove existing permissions' 
-        }, { status: 400 })
-      }
-
-      // If no permissions to add, return success (all permissions were removed)
-      if (validatedData.permission_ids.length === 0) {
-        return NextResponse.json({ 
-          data: [],
-          message: 'All permissions removed from role successfully' 
-        }, { status: 200 })
-      }
-
       // Remove duplicates from permission_ids array
       const uniquePermissionIds = [...new Set(validatedData.permission_ids)]
 
-      // Insert new permissions (only unique ones)
-      const inserts = uniquePermissionIds.map(permission_id => ({
-        role_id: validatedData.role_id,
-        permission_id,
-      }))
-
-      const { data, error } = await adminClient
+      // Get existing permissions for this role (only IDs for comparison)
+      const { data: existingPermissions, error: fetchError } = await adminClient
         .from('role_permissions')
-        .insert(inserts)
-        .select()
+        .select('permission_id')
+        .eq('role_id', validatedData.role_id)
 
-      if (error) {
-        console.error('Error inserting permissions:', error)
+      if (fetchError) {
+        console.error('Error fetching existing permissions:', fetchError)
         return NextResponse.json({ 
-          error: error.message || 'Failed to assign permissions' 
+          error: fetchError.message || 'Failed to fetch existing permissions' 
         }, { status: 400 })
       }
 
-      return NextResponse.json({ data }, { status: 201 })
+      const existingPermissionIds = new Set(
+        (existingPermissions || []).map((rp: any) => rp.permission_id)
+      )
+      const newPermissionIds = new Set(uniquePermissionIds)
+
+      // Find permissions to add (in new but not in existing)
+      const toAdd = uniquePermissionIds.filter(id => !existingPermissionIds.has(id))
+      
+      // Find permissions to remove (in existing but not in new)
+      const toRemove = (Array.from(existingPermissionIds) as string[]).filter(
+        (id: string) => !newPermissionIds.has(id)
+      )
+
+      // If no changes, return early
+      if (toAdd.length === 0 && toRemove.length === 0) {
+        // Fetch and return current permissions
+        const { data: currentPermissions } = await adminClient
+          .from('role_permissions')
+          .select('*')
+          .eq('role_id', validatedData.role_id)
+        
+        return NextResponse.json({ 
+          data: currentPermissions || [],
+          message: 'No changes detected' 
+        }, { status: 200 })
+      }
+
+      // Perform deletions and insertions in parallel for better performance
+      const operations: Promise<any>[] = []
+
+      // Delete permissions that need to be removed
+      if (toRemove.length > 0) {
+        const deleteOp = adminClient
+          .from('role_permissions')
+          .delete()
+          .eq('role_id', validatedData.role_id)
+          .in('permission_id', toRemove)
+        
+        operations.push(deleteOp)
+      }
+
+      // Insert new permissions
+      if (toAdd.length > 0) {
+        const inserts = toAdd.map(permission_id => ({
+          role_id: validatedData.role_id,
+          permission_id,
+        }))
+        
+        const insertOp = adminClient
+          .from('role_permissions')
+          .insert(inserts)
+          .select()
+        
+        operations.push(insertOp)
+      }
+
+      // Execute all operations in parallel (if both exist) or sequentially (if only one)
+      if (operations.length > 0) {
+        const results = await Promise.all(operations)
+        
+        // Check for errors
+        for (const result of results) {
+          if (result && result.error) {
+            console.error('Error in permission operation:', result.error)
+            return NextResponse.json({ 
+              error: result.error.message || 'Failed to update permissions' 
+            }, { status: 400 })
+          }
+        }
+      }
+
+      // Fetch and return updated permissions
+      const { data: updatedPermissions, error: finalError } = await adminClient
+        .from('role_permissions')
+        .select('*')
+        .eq('role_id', validatedData.role_id)
+
+      if (finalError) {
+        console.error('Error fetching updated permissions:', finalError)
+        return NextResponse.json({ 
+          error: finalError.message || 'Failed to fetch updated permissions' 
+        }, { status: 400 })
+      }
+
+      return NextResponse.json({ 
+        data: updatedPermissions || [],
+        message: `Updated ${toAdd.length} added, ${toRemove.length} removed` 
+      }, { status: 200 })
     } else {
       // Single assignment
       const validatedData = assignPermissionSchema.parse(body)
@@ -361,6 +435,12 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    // Apply rate limiting (strict: 10 requests per minute for delete operations)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.strict)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
 

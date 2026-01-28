@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import * as z from 'zod'
 import { isAdmin } from '@/lib/utils/permission-helpers'
+import { rateLimit, rateLimitPresets } from '@/lib/utils/rate-limit'
 
 const updateUserSchema = z.object({
   name: z.string().min(1).optional(),
@@ -16,6 +17,12 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
+    // Apply rate limiting (60 requests per minute)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.default)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     
     // Check if user is authenticated and is admin
@@ -98,6 +105,12 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
+    // Apply rate limiting (strict: 10 requests per minute for delete operations)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.strict)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     
     // Check if user is authenticated and is admin

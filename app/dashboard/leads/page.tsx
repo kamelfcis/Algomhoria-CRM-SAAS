@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useMemo, useCallback, memo, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, memo, useEffect, useRef } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
@@ -20,6 +21,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
+import { PhoneInputField } from '@/components/ui/phone-input'
 import { Label } from '@/components/ui/label'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -135,14 +137,23 @@ interface LeadActivity {
   }
 }
 
-async function getLeads() {
+async function getLeads(userId?: string | null, isSales?: boolean) {
   const supabase = createClient()
   
-  // First get all leads
-  const { data: leadsData, error: leadsError } = await supabase
+  // Build query with optional filter for sales employees
+  let query = supabase
     .from('leads')
     .select('*')
+  
+  // Sales employees can only see leads assigned to them
+  // IMPORTANT: Filter at database level for security
+  if (isSales && userId) {
+    query = query.eq('assigned_to', userId)
+  }
+  
+  const { data: leadsData, error: leadsError } = await query
     .order('created_at', { ascending: false })
+    .limit(1000) // Limit to prevent memory issues with large datasets
 
   if (leadsError) {
     console.error('Error fetching leads:', leadsError)
@@ -155,35 +166,42 @@ async function getLeads() {
   // Fetch user details for assigned users
   let usersMap: Record<string, { id: string; name: string; email: string; role: string }> = {}
   if (assignedUserIds.length > 0) {
+    // Batch fetch all users
     const { data: usersData } = await supabase
       .from('users')
       .select('id, name, email')
       .in('id', assignedUserIds)
     
-    if (usersData) {
-      // Fetch roles for each user
-      const usersWithRoles = await Promise.all(
-        usersData.map(async (user: any) => {
-          const { data: userRoles } = await supabase
-            .from('user_roles')
-            .select(`
-              role_id,
-              roles!inner(name, status)
-            `)
-            .eq('user_id', user.id)
-          
-          const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
-          const roleName = (activeRole as any)?.roles?.name || 'user'
-          
-          return {
-            ...user,
-            role: roleName,
-          }
-        })
-      )
+    if (usersData && usersData.length > 0) {
+      // Batch fetch all user roles in a single query (optimize N+1)
+      const { data: allUserRoles } = await supabase
+        .from('user_roles')
+        .select(`
+          user_id,
+          role_id,
+          roles!inner(name, status)
+        `)
+        .in('user_id', assignedUserIds)
       
-      usersMap = usersWithRoles.reduce((acc: any, user: any) => {
-        acc[user.id] = user
+      // Group roles by user_id
+      const rolesByUserId: Record<string, any[]> = {}
+      allUserRoles?.forEach((ur: any) => {
+        if (!rolesByUserId[ur.user_id]) {
+          rolesByUserId[ur.user_id] = []
+        }
+        rolesByUserId[ur.user_id].push(ur)
+      })
+      
+      // Map users with their roles
+      usersMap = usersData.reduce((acc: any, user: any) => {
+        const userRoles = rolesByUserId[user.id] || []
+        const activeRole = userRoles.find((ur: any) => ur.roles?.status === 'active')
+        const roleName = activeRole?.roles?.name || 'user'
+        
+        acc[user.id] = {
+          ...user,
+          role: roleName,
+        }
         return acc
       }, {})
     }
@@ -203,31 +221,55 @@ async function getUsers() {
     .select('id, name, email')
     .eq('status', 'active')
   
-  if (error || !users) return []
+  if (error || !users || users.length === 0) return []
   
-  // Fetch roles and filter by role names
-  const usersWithRoles = await Promise.all(
-    users.map(async (user: any) => {
-      const { data: userRoles } = await supabase
-        .from('user_roles')
-        .select(`
-          role_id,
-          roles!inner(name, status)
-        `)
-        .eq('user_id', user.id)
-      
-      const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
-      const roleName = (activeRole as any)?.roles?.name || 'user'
-      
-      return {
-        ...user,
-        role: roleName,
-      }
-    })
-  )
+  // Batch fetch all user roles in a single query (optimize N+1)
+  const userIds = users.map(u => u.id)
+  const { data: allUserRoles } = await supabase
+    .from('user_roles')
+    .select(`
+      user_id,
+      role_id,
+      roles!inner(name, status)
+    `)
+    .in('user_id', userIds)
   
-  // Filter by allowed roles
-  return usersWithRoles.filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
+  // Group roles by user_id and find active role
+  const rolesByUserId: Record<string, string> = {}
+  allUserRoles?.forEach((ur: any) => {
+    if (ur.roles?.status === 'active' && !rolesByUserId[ur.user_id]) {
+      rolesByUserId[ur.user_id] = ur.roles?.name || 'user'
+    }
+  })
+  
+  // Map roles to users and filter by allowed roles
+  const usersWithRoles = users
+    .map((user: any) => ({
+      ...user,
+      role: rolesByUserId[user.id] || 'user',
+    }))
+    .filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
+  
+  return usersWithRoles
+}
+
+async function getPropertiesForDropdown() {
+  const supabase = createClient()
+  const { data, error } = await supabase
+    .from('properties')
+    .select('id, title_en, title_ar, code')
+    .order('created_at', { ascending: false })
+
+  if (error) {
+    console.error('Error fetching properties:', error)
+    return []
+  }
+  
+  return (data || []).map((property: any) => ({
+    id: property.id,
+    title: property.title_en || property.title_ar || property.code || 'Untitled',
+    code: property.code || '',
+  }))
 }
 
 async function updateLead(id: string, leadData: Partial<LeadUpdateForm>) {
@@ -488,6 +530,9 @@ export default function LeadsPage() {
   const { profile, user } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const expandedRowRef = useRef<HTMLDivElement | null>(null)
   
   // Check permissions
   const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('leads')
@@ -507,15 +552,39 @@ export default function LeadsPage() {
   const [deleteActivityDialogOpen, setDeleteActivityDialogOpen] = useState(false)
   const [isFormHighlighted, setIsFormHighlighted] = useState(false)
 
+  // Check if user has sales role (for filtering purposes)
+  // Sales users have create/edit permissions but NOT delete permissions
+  // Admins have all permissions including delete, so they should see all leads
+  const isSales = useMemo(() => {
+    // First check profile role directly
+    if (profile?.role === 'sales') {
+      return true
+    }
+    // Fallback: If user has delete permissions, they're an admin and should see all leads
+    // Only apply sales filter if user has create/edit but NOT delete permissions
+    return (canCreate || canEdit) && !canDelete
+  }, [profile?.role, canCreate, canEdit, canDelete])
+
   const { data: leads, isLoading } = useQuery({
-    queryKey: ['leads'],
-    queryFn: getLeads,
-    enabled: canView, // Only fetch if user has view permission
+    queryKey: ['leads', profile?.id, isSales, profile?.role],
+    queryFn: () => getLeads(profile?.id, isSales),
+    enabled: canView && !!profile?.id, // Only fetch if user has view permission and profile is loaded
+    staleTime: 30000, // Cache for 30 seconds - balance between freshness and performance
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   })
 
   const { data: users } = useQuery({
     queryKey: ['users-for-assignment'],
     queryFn: getUsers,
+    staleTime: 2 * 60 * 1000, // Cache for 2 minutes - users don't change frequently
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+  })
+
+  const { data: properties } = useQuery({
+    queryKey: ['properties-for-dropdown'],
+    queryFn: getPropertiesForDropdown,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes - properties list changes infrequently
+    gcTime: 15 * 60 * 1000, // Keep in cache for 15 minutes
   })
 
   const updateMutation = useMutation({
@@ -674,6 +743,7 @@ export default function LeadsPage() {
     formState: { errors },
     reset,
     setValue,
+    watch,
   } = useForm<LeadUpdateForm>({
     resolver: zodResolver(leadUpdateSchema),
     defaultValues: {
@@ -697,6 +767,7 @@ export default function LeadsPage() {
     formState: { errors: createErrors },
     reset: createReset,
     setValue: createSetValue,
+    watch: createWatch,
   } = useForm<LeadCreateForm>({
     resolver: zodResolver(leadCreateSchema),
     defaultValues: {
@@ -745,6 +816,8 @@ export default function LeadsPage() {
     queryKey: ['lead-activities', expandedRowId],
     queryFn: () => expandedRowId ? getLeadActivities(expandedRowId) : Promise.resolve([]),
     enabled: !!expandedRowId,
+    staleTime: 10000, // Cache for 10 seconds - activities can change frequently
+    gcTime: 2 * 60 * 1000, // Keep in cache for 2 minutes
   })
 
   const activityMutation = useMutation({
@@ -843,7 +916,7 @@ export default function LeadsPage() {
         // The database should store it in UTC and convert back when reading
         processedData.follow_up_date = localDate.toISOString()
       } else {
-        processedData.follow_up_date = null
+        processedData.follow_up_date = undefined
       }
     }
     
@@ -906,7 +979,7 @@ export default function LeadsPage() {
     }
   }, [activityToDelete, deleteActivityMutation])
 
-  const handleToggleExpand = useCallback((lead: Lead) => {
+  const handleToggleExpand = useCallback((lead: Lead, scrollTo = false) => {
     if (expandedRowId === lead.id) {
       setExpandedRowId(null)
       reset()
@@ -923,8 +996,27 @@ export default function LeadsPage() {
       setValue('priority', lead.priority as any)
       setValue('assigned_to', lead.assigned_to || undefined)
       setValue('notes', lead.notes || '')
+      
+      if (scrollTo) {
+        setTimeout(() => {
+          expandedRowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 100)
+      }
     }
   }, [expandedRowId, reset, setValue])
+
+  // Handle expand parameter from URL
+  useEffect(() => {
+    const expandId = searchParams.get('expand')
+    if (expandId && leads && !expandedRowId) {
+      const leadToExpand = leads.find((l: Lead) => l.id === expandId)
+      if (leadToExpand) {
+        handleToggleExpand(leadToExpand, true)
+        // Remove the expand parameter from URL
+        router.replace('/dashboard/leads', { scroll: false })
+      }
+    }
+  }, [searchParams, leads, expandedRowId, handleToggleExpand, router])
 
   const handleDelete = useCallback((lead: Lead) => {
     setLeadToDelete(lead)
@@ -936,15 +1028,6 @@ export default function LeadsPage() {
       deleteMutation.mutate(leadToDelete.id)
     }
   }, [leadToDelete, deleteMutation])
-
-  // Check if user has sales role (for filtering purposes)
-  // Sales users have create/edit permissions but NOT delete permissions
-  // Admins have all permissions including delete, so they should see all leads
-  const isSales = useMemo(() => {
-    // If user has delete permissions, they're an admin and should see all leads
-    // Only apply sales filter if user has create/edit but NOT delete permissions
-    return (canCreate || canEdit) && !canDelete
-  }, [canCreate, canEdit, canDelete])
 
   // Memoized color functions
   const getPriorityColor = useCallback((priority: string) => {
@@ -976,15 +1059,12 @@ export default function LeadsPage() {
   }, [])
 
   // Filter and search leads - memoized for performance
+  // Note: Sales employees are already filtered at the database level,
+  // but we still need to apply other filters (status, priority, search, etc.)
   const filteredLeads = useMemo(() => {
     if (!leads) return []
     
     return leads.filter((lead: any) => {
-      // Sales users can only see leads assigned to them
-      if (isSales && lead.assigned_to !== profile?.id) {
-        return false
-      }
-      
       if (statusFilter !== 'all' && lead.status !== statusFilter) return false
       if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
       
@@ -1008,7 +1088,7 @@ export default function LeadsPage() {
       }
       return true
     })
-  }, [leads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
+  }, [leads, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
 
   // Memoized columns definition
   const columns = useMemo(() => [
@@ -1131,7 +1211,7 @@ export default function LeadsPage() {
             Manage customer inquiries and leads
           </p>
         </div>
-        {(canCreate && !isSales) && (
+        {canCreate && (
           <Button 
             onClick={() => setIsCreating(!isCreating)}
             className="transition-all duration-300 hover:scale-105 hover:shadow-lg animate-in fade-in-50 duration-700 delay-200 w-full sm:w-auto"
@@ -1316,11 +1396,14 @@ export default function LeadsPage() {
 
                     <div className="space-y-2">
                       <Label htmlFor="create-phone">{t('leads.phone') || 'Phone'} *</Label>
-                      <Input
+                      <PhoneInputField
                         id="create-phone"
-                        {...createRegister('phone_number')}
+                        name="phone_number"
+                        value={createWatch('phone_number') || ''}
+                        onChange={(value) => createSetValue('phone_number', value, { shouldValidate: true })}
                         disabled={createMutation.isPending}
                         placeholder="Enter phone number"
+                        error={!!createErrors.phone_number}
                       />
                       {createErrors.phone_number && (
                         <p className="text-xs text-destructive">{createErrors.phone_number.message}</p>
@@ -1390,12 +1473,23 @@ export default function LeadsPage() {
 
                     <div className="space-y-2">
                       <Label htmlFor="create-entity-title">Entity Title (Optional)</Label>
-                      <Input
-                        id="create-entity-title"
-                        {...createRegister('entity_title')}
+                      <Select
+                        value={createWatch('entity_title') || ''}
+                        onValueChange={(value) => createSetValue('entity_title', value === 'none' ? '' : value)}
                         disabled={createMutation.isPending}
-                        placeholder="Entity title"
-                      />
+                      >
+                        <SelectTrigger id="create-entity-title">
+                          <SelectValue placeholder="Select a property" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {properties?.map((property: any) => (
+                            <SelectItem key={property.id} value={property.id}>
+                              {property.title} {property.code ? `(${property.code})` : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                   </div>
                 </div>
 
@@ -1489,6 +1583,7 @@ export default function LeadsPage() {
                     const isExpanded = expandedRowId === lead.id
                     return (
                       <React.Fragment key={lead.id}>
+                        {isExpanded && <div ref={expandedRowRef} />}
                         <TableRow className={cn(
                           "transition-all duration-300 hover:bg-muted/50 animate-in fade-in-50 slide-in-from-left-4 hover:shadow-sm",
                           isExpanded && 'bg-muted/50'
@@ -1628,11 +1723,14 @@ export default function LeadsPage() {
 
                                     <div className="space-y-2">
                                       <Label htmlFor={`phone-${lead.id}`}>{t('leads.phone') || 'Phone'} *</Label>
-                                      <Input
+                                      <PhoneInputField
                                         id={`phone-${lead.id}`}
-                                        {...register('phone_number')}
+                                        name="phone_number"
+                                        value={watch('phone_number') || ''}
+                                        onChange={(value) => setValue('phone_number', value, { shouldValidate: true })}
                                         disabled={updateMutation.isPending}
                                         placeholder="Enter phone number"
+                                        error={!!errors.phone_number}
                                       />
                                       {errors.phone_number && (
                                         <p className="text-xs text-destructive">{errors.phone_number.message}</p>
@@ -1705,12 +1803,23 @@ export default function LeadsPage() {
 
                                     <div className="space-y-2">
                                       <Label htmlFor={`entity_title-${lead.id}`}>Entity Title (Optional)</Label>
-                                      <Input
-                                        id={`entity_title-${lead.id}`}
-                                        {...register('entity_title')}
+                                      <Select
+                                        value={watch('entity_title') || ''}
+                                        onValueChange={(value) => setValue('entity_title', value === 'none' ? '' : value)}
                                         disabled={updateMutation.isPending}
-                                        placeholder="Entity title"
-                                      />
+                                      >
+                                        <SelectTrigger id={`entity_title-${lead.id}`}>
+                                          <SelectValue placeholder="Select a property" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="none">None</SelectItem>
+                                          {properties?.map((property: any) => (
+                                            <SelectItem key={property.id} value={property.id}>
+                                              {property.title} {property.code ? `(${property.code})` : ''}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
                   </div>
                 </div>
 
@@ -2024,6 +2133,7 @@ export default function LeadsPage() {
                     const isExpanded = expandedRowId === lead.id
                     return (
                       <React.Fragment key={lead.id}>
+                        {isExpanded && <div ref={expandedRowRef} />}
                         <Card className={cn(
                           "relative backdrop-blur-sm border-2 border-gold-dark/20 dark:border-gold-light/20 bg-white/80 dark:bg-black/40",
                           "transition-all duration-300 hover:shadow-xl hover:scale-[1.02] hover:border-primary/50",
@@ -2180,11 +2290,14 @@ export default function LeadsPage() {
 
                                   <div className="space-y-2">
                                     <Label htmlFor={`phone-${lead.id}`}>{t('leads.phone') || 'Phone'} *</Label>
-                                    <Input
+                                    <PhoneInputField
                                       id={`phone-${lead.id}`}
-                                      {...register('phone_number')}
+                                      name="phone_number"
+                                      value={watch('phone_number') || ''}
+                                      onChange={(value) => setValue('phone_number', value, { shouldValidate: true })}
                                       disabled={updateMutation.isPending}
                                       placeholder="Enter phone number"
+                                      error={!!errors.phone_number}
                                     />
                                     {errors.phone_number && (
                                       <p className="text-xs text-destructive">{errors.phone_number.message}</p>
@@ -2257,12 +2370,23 @@ export default function LeadsPage() {
 
                                   <div className="space-y-2">
                                     <Label htmlFor={`entity_title-${lead.id}`}>Entity Title (Optional)</Label>
-                                    <Input
-                                      id={`entity_title-${lead.id}`}
-                                      {...register('entity_title')}
+                                    <Select
+                                      value={watch('entity_title') || ''}
+                                      onValueChange={(value) => setValue('entity_title', value === 'none' ? '' : value)}
                                       disabled={updateMutation.isPending}
-                                      placeholder="Entity title"
-                                    />
+                                    >
+                                      <SelectTrigger id={`entity_title-${lead.id}`}>
+                                        <SelectValue placeholder="Select a property" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="none">None</SelectItem>
+                                        {properties?.map((property: any) => (
+                                          <SelectItem key={property.id} value={property.id}>
+                                            {property.title} {property.code ? `(${property.code})` : ''}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
                                   </div>
                                 </div>
 

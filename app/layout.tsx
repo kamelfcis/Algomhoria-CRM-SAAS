@@ -6,8 +6,8 @@ import { Providers } from './providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Admin Dashboard',
-  description: 'Admin Dashboard for Algomhoria',
+  title: 'Algomhoria - Your Pathway to Home Sweet Home',
+  description: 'More than Property, We Offer Possibilities. Find your dream property with ease.',
   icons: {
     icon: [
       { url: '/logo.png', type: 'image/png' },

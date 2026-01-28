@@ -5,6 +5,7 @@ import { X, Upload, Image as ImageIcon, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import Image from 'next/image'
 
 interface PropertyImage {
   id: string
@@ -258,10 +259,13 @@ export function PropertyImageUpload({
                   image.is_primary ? 'border-gold ring-2 ring-gold/20' : 'border-border'
                 )}
               >
-                <img
+                <Image
                   src={image.url}
                   alt="Property"
-                  className="w-full h-full object-cover"
+                  fill
+                  className="object-cover"
+                  sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+                  loading="lazy"
                 />
                 {image.is_primary && (
                   <div className="absolute top-2 left-2 bg-gold text-white text-xs font-bold px-2 py-1 rounded">

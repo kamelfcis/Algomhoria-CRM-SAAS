@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 
+  IIS Configuration for Next.js Application
+  Copy this file to web.config in your deployment directory
+  Update paths and settings according to your setup
+-->
+<configuration>
+  <system.webServer>
+    <!-- Handler for iisnode (if using Method 1: Direct Node.js hosting) -->
+    <handlers>
+      <add name="iisnode" path=".next/standalone/server.js" verb="*" modules="iisnode"/>
+    </handlers>
+    
+    <!-- URL Rewrite Rules -->
+    <rewrite>
+      <rules>
+        <!-- Don't interfere with requests for node-inspector debugging -->
+        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
+          <match url="^server.js\/debug[\/]?" />
+        </rule>
+
+        <!-- First we consider whether the incoming URL matches a physical file in the /public folder -->
+        <rule name="StaticContent">
+          <action type="Rewrite" url="public{REQUEST_URI}"/>
+        </rule>
+
+        <!-- All other URLs are mapped to the Node.js application entry point -->
+        <rule name="DynamicContent">
+          <conditions>
+            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True"/>
+          </conditions>
+          <action type="Rewrite" url=".next/standalone/server.js"/>
+        </rule>
+      </rules>
+    </rewrite>
+
+    <!-- Security: Hide sensitive files -->
+    <security>
+      <requestFiltering>
+        <hiddenSegments>
+          <remove segment="bin"/>
+          <add segment=".env.production" />
+          <add segment=".env.local" />
+          <add segment="node_modules" />
+        </hiddenSegments>
+      </requestFiltering>
+    </security>
+
+    <!-- Make sure error responses are left untouched -->
+    <httpErrors existingResponse="PassThrough" />
+
+    <!-- iisnode Configuration -->
+    <iisnode
+      node_env="production"
+      nodeProcessCountPerApplication="1"
+      maxConcurrentRequestsPerProcess="1024"
+      maxNamedPipeConnectionRetry="100"
+      namedPipeConnectionRetryDelay="250"
+      maxNamedPipeConnectionPoolSize="512"
+      maxNamedPipePooledConnectionAge="30000"
+      asyncCompletionThreadCount="0"
+      initialRequestBufferSize="4096"
+      maxRequestBufferSize="65536"
+      watchedFiles="*.js;iisnode.yml"
+      uncFileChangesPollingInterval="5000"
+      gracefulShutdownTimeout="60000"
+      loggingEnabled="true"
+      logDirectory="iisnode"
+      debuggingEnabled="false"
+      debugHeaderEnabled="false"
+      debuggerPortRange="5058-6058"
+      debuggerPathSegment="debug"
+      maxLogFileSizeInKB="128"
+      maxTotalLogFileSizeInKB="1024"
+      maxLogFiles="20"
+      devErrorsEnabled="false"
+      flushResponse="false"
+      enableXFF="false"
+      configOverrides="iisnode.yml"
+      />
+
+    <!-- Environment Variables (Alternative to .env file) -->
+    <!-- Uncomment and configure if not using .env.production file -->
+    <!--
+    <aspNetCore>
+      <environmentVariables>
+        <environmentVariable name="NODE_ENV" value="production" />
+        <environmentVariable name="NEXT_PUBLIC_SUPABASE_URL" value="your_supabase_url" />
+        <environmentVariable name="NEXT_PUBLIC_SUPABASE_ANON_KEY" value="your_anon_key" />
+        <environmentVariable name="NEXT_PUBLIC_APP_URL" value="https://your-domain.com" />
+      </environmentVariables>
+    </aspNetCore>
+    -->
+  </system.webServer>
+</configuration>
+

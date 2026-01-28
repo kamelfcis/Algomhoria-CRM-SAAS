@@ -70,3 +70,61 @@
   }
 }
 
+/* Phone Input Styles */
+.phone-input-wrapper {
+  width: 100%;
+}
+
+.phone-input-container {
+  width: 100% !important;
+}
+
+.phone-input-container.phone-input-error .phone-input-field {
+  border-color: hsl(var(--destructive)) !important;
+  border-width: 2px !important;
+}
+
+.phone-input-container.phone-input-error .phone-input-field:focus {
+  ring-color: hsl(var(--destructive)) !important;
+}
+
+.phone-input-field {
+  width: 100% !important;
+  height: 2.5rem !important;
+  padding-left: 3.5rem !important;
+}
+
+.phone-input-button {
+  background-color: transparent !important;
+  border: none !important;
+  border-right: 1px solid hsl(var(--input)) !important;
+  border-radius: 0.5rem 0 0 0.5rem !important;
+}
+
+.phone-input-dropdown {
+  z-index: 9999 !important;
+  background-color: hsl(var(--popover)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1) !important;
+}
+
+.phone-input-dropdown .country-list {
+  max-height: 300px !important;
+  overflow-y: auto !important;
+}
+
+.phone-input-dropdown .country-list .country {
+  padding: 0.5rem 1rem !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.phone-input-dropdown .country-list .country:hover {
+  background-color: hsl(var(--accent)) !important;
+}
+
+.phone-input-dropdown .country-list .country.highlight {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+

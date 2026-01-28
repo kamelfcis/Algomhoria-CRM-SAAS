@@ -1,0 +1,25 @@
+# Supabase configuration file
+# This file is used for local development and deployment with Supabase CLI
+
+[project]
+# Your project reference ID (found in Supabase dashboard URL)
+# Example: https://supabase.com/dashboard/project/abcdefghijklmnop
+# Uncomment and set your project reference ID:
+# reference_id = "your-project-ref-id"
+
+# Schedule the check-expired-rentals function to run daily
+# Cron format: minute hour day month weekday
+# Examples:
+#   "0 0 * * *"   - Daily at midnight UTC
+#   "0 22 * * *"  - Daily at 10 PM UTC (midnight Cairo time, UTC+2)
+#   "0 2 * * *"   - Daily at 2 AM UTC
+#   "0 */6 * * *" - Every 6 hours
+[functions.check-expired-rentals]
+schedule = "0 22 * * *"  # Daily at 10 PM UTC (midnight Cairo time, UTC+2)
+
+# Environment variables for the Edge Function
+# These are automatically available from Supabase:
+# - SUPABASE_URL
+# - SUPABASE_SERVICE_ROLE_KEY
+# No need to set them manually
+

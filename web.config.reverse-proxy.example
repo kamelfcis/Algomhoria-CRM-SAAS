@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 
+  IIS Reverse Proxy Configuration for Next.js Application
+  Use this if running Next.js with PM2 and IIS as reverse proxy (Method 2)
+  Copy this file to web.config in your deployment directory
+  Update the port (3000) to match your Next.js server port
+-->
+<configuration>
+  <system.webServer>
+    <!-- URL Rewrite Rules for Reverse Proxy -->
+    <rewrite>
+      <rules>
+        <!-- Force HTTPS redirect (uncomment if using SSL) -->
+        <!--
+        <rule name="HTTP to HTTPS redirect" stopProcessing="true">
+          <match url="(.*)" />
+          <conditions>
+            <add input="{HTTPS}" pattern="off" ignoreCase="true" />
+          </conditions>
+          <action type="Redirect" url="https://{HTTP_HOST}/{R:1}" redirectType="Permanent" />
+        </rule>
+        -->
+
+        <!-- Reverse Proxy Rule: Forward all requests to Next.js server -->
+        <rule name="ReverseProxyInboundRule" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://localhost:3000/{R:1}" />
+          <serverVariables>
+            <!-- Forward protocol information -->
+            <set name="HTTP_X_FORWARDED_PROTO" value="https" />
+            <!-- Forward host information -->
+            <set name="HTTP_X_FORWARDED_HOST" value="{HTTP_HOST}" />
+            <!-- Forward client IP address -->
+            <set name="HTTP_X_FORWARDED_FOR" value="{REMOTE_ADDR}" />
+            <!-- Forward original request URI -->
+            <set name="HTTP_X_ORIGINAL_URI" value="{REQUEST_URI}" />
+          </serverVariables>
+        </rule>
+      </rules>
+    </rewrite>
+
+    <!-- Security: Hide sensitive files -->
+    <security>
+      <requestFiltering>
+        <hiddenSegments>
+          <add segment=".env.production" />
+          <add segment=".env.local" />
+          <add segment="node_modules" />
+        </hiddenSegments>
+      </requestFiltering>
+    </security>
+
+    <!-- Make sure error responses are left untouched -->
+    <httpErrors existingResponse="PassThrough" />
+  </system.webServer>
+</configuration>
+

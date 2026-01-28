@@ -1,15 +1,20 @@
 'use client'
 
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { 
   Users, UserCheck, FileText, Home, TrendingUp, Clock, CheckCircle, 
   MessageSquare, Calendar, Mail, Building2, FolderKanban, Briefcase,
-  MapPin, Star, CreditCard, Settings, Shield, History, Image
+  MapPin, Star, CreditCard, Settings, Shield, History, Image, Phone, User, AlertCircle
 } from 'lucide-react'
 import {
   BarChart,
@@ -26,6 +31,144 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts'
+
+async function getFollowUpLeads(startDate?: string, endDate?: string) {
+  const supabase = createClient()
+  
+  try {
+    // Build query for activities with follow_up_date
+    let query = supabase
+      .from('lead_activities')
+      .select('id, lead_id, direct_lead_id, follow_up_date, action, notes, created_at')
+      .not('follow_up_date', 'is', null)
+      .order('follow_up_date', { ascending: true })
+
+    // Apply date filters if provided
+    // Convert date strings (YYYY-MM-DD) to ISO timestamps
+    if (startDate) {
+      // Parse date components and create date in local timezone
+      const [year, month, day] = startDate.split('-').map(Number)
+      const startDateObj = new Date(year, month - 1, day, 0, 0, 0, 0)
+      const startDateTime = startDateObj.toISOString()
+      query = query.gte('follow_up_date', startDateTime)
+    }
+    if (endDate) {
+      // Parse date components and create date in local timezone at end of day
+      const [year, month, day] = endDate.split('-').map(Number)
+      const endDateObj = new Date(year, month - 1, day, 23, 59, 59, 999)
+      const endDateTime = endDateObj.toISOString()
+      query = query.lte('follow_up_date', endDateTime)
+    }
+
+    const { data: activities, error } = await query
+
+    if (error) {
+      console.error('Error fetching follow-up leads:', error)
+      return []
+    }
+
+    if (!activities || activities.length === 0) {
+      return []
+    }
+
+    // Get all unique lead IDs and direct lead IDs
+    const leadIds = activities.filter(a => a.lead_id).map(a => a.lead_id)
+    const directLeadIds = activities.filter(a => a.direct_lead_id).map(a => a.direct_lead_id)
+
+    // Fetch leads data
+    let leadsMap: Record<string, any> = {}
+    if (leadIds.length > 0) {
+      const { data: leadsData } = await supabase
+        .from('leads')
+        .select('id, name, phone_number, email, assigned_to')
+        .in('id', leadIds)
+      
+      if (leadsData) {
+        leadsMap = leadsData.reduce((acc: any, lead: any) => {
+          acc[lead.id] = lead
+          return acc
+        }, {})
+      }
+    }
+
+    // Fetch direct leads data
+    let directLeadsMap: Record<string, any> = {}
+    if (directLeadIds.length > 0) {
+      const { data: directLeadsData } = await supabase
+        .from('direct_leads')
+        .select('id, name, phone_number, email, assigned_to')
+        .in('id', directLeadIds)
+      
+      if (directLeadsData) {
+        directLeadsMap = directLeadsData.reduce((acc: any, lead: any) => {
+          acc[lead.id] = lead
+          return acc
+        }, {})
+      }
+    }
+
+    // Get all unique assigned user IDs
+    const allAssignedUserIds = [
+      ...Object.values(leadsMap).map((l: any) => l.assigned_to).filter(Boolean),
+      ...Object.values(directLeadsMap).map((l: any) => l.assigned_to).filter(Boolean),
+    ]
+    const uniqueUserIds = [...new Set(allAssignedUserIds)]
+
+    // Fetch assigned users
+    let usersMap: Record<string, { id: string; name: string; email: string }> = {}
+    if (uniqueUserIds.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, name, email')
+        .in('id', uniqueUserIds)
+      
+      if (usersData) {
+        usersMap = usersData.reduce((acc: any, user: any) => {
+          acc[user.id] = user
+          return acc
+        }, {})
+      }
+    }
+
+    // Transform data to include lead info and calculate days until follow-up
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    return activities.map((activity: any) => {
+      const followUpDate = new Date(activity.follow_up_date)
+      followUpDate.setHours(0, 0, 0, 0)
+      
+      const daysUntil = Math.ceil((followUpDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+      
+      // Determine if it's a lead or direct lead
+      const leadData = activity.lead_id ? leadsMap[activity.lead_id] : directLeadsMap[activity.direct_lead_id]
+      const leadType = activity.lead_id ? 'lead' : 'direct_lead'
+      const leadId = activity.lead_id || activity.direct_lead_id
+      const assignedTo = leadData?.assigned_to
+      const assignedUser = assignedTo ? usersMap[assignedTo] || null : null
+
+      return {
+        id: activity.id,
+        activityId: activity.id,
+        leadId,
+        leadType,
+        name: leadData?.name || 'Unknown',
+        phone_number: leadData?.phone_number || '-',
+        email: leadData?.email || null,
+        follow_up_date: activity.follow_up_date,
+        daysUntil,
+        action: activity.action,
+        notes: activity.notes,
+        created_at: activity.created_at,
+        assigned_user: assignedUser,
+        assigned_to: assignedTo,
+      }
+    })
+  } catch (error) {
+    console.error('Error in getFollowUpLeads:', error)
+    return []
+  }
+}
 
 async function getDashboardStats() {
   const supabase = createClient()
@@ -89,43 +232,60 @@ async function getDashboardStats() {
     supabase.from('areas').select('*', { count: 'exact', head: true }),
   ])
 
-  // Get monthly activity data
+  // Get monthly activity data - optimized: only fetch counts per month instead of all records
   const sixMonthsAgo = new Date()
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+  const sixMonthsAgoISO = sixMonthsAgo.toISOString()
 
+  // Get last 6 months data - fetch only what we need for aggregation
+  // This is more efficient than fetching all records and counting in JavaScript
   const [recentUsers, recentPosts, recentProperties] = await Promise.all([
     supabase
       .from('users')
       .select('created_at')
-      .gte('created_at', sixMonthsAgo.toISOString()),
+      .gte('created_at', sixMonthsAgoISO)
+      .limit(10000), // Limit to prevent excessive data transfer
     supabase
       .from('posts')
       .select('created_at')
-      .gte('created_at', sixMonthsAgo.toISOString()),
+      .gte('created_at', sixMonthsAgoISO)
+      .limit(10000),
     supabase
       .from('properties')
       .select('created_at')
-      .gte('created_at', sixMonthsAgo.toISOString()),
+      .gte('created_at', sixMonthsAgoISO)
+      .limit(10000),
   ])
 
-  // Process monthly data
+  // Process monthly data - optimized aggregation
   const monthlyData: Record<string, { users: number; posts: number; properties: number }> = {}
   
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun']
+  // Get last 6 months in order
+  const months: string[] = []
+  for (let i = 5; i >= 0; i--) {
+    const date = new Date()
+    date.setMonth(date.getMonth() - i)
+    months.push(date.toLocaleDateString('en-US', { month: 'short' }))
+  }
+  
+  // Initialize all months
   months.forEach(month => {
     monthlyData[month] = { users: 0, posts: 0, properties: 0 }
   })
 
+  // Aggregate users by month
   recentUsers.data?.forEach((user: any) => {
     const month = new Date(user.created_at).toLocaleDateString('en-US', { month: 'short' })
     if (monthlyData[month]) monthlyData[month].users++
   })
 
+  // Aggregate posts by month
   recentPosts.data?.forEach((post: any) => {
     const month = new Date(post.created_at).toLocaleDateString('en-US', { month: 'short' })
     if (monthlyData[month]) monthlyData[month].posts++
   })
 
+  // Aggregate properties by month
   recentProperties.data?.forEach((property: any) => {
     const month = new Date(property.created_at).toLocaleDateString('en-US', { month: 'short' })
     if (monthlyData[month]) monthlyData[month].properties++
@@ -136,14 +296,26 @@ async function getDashboardStats() {
     ...data,
   }))
 
-  // Status breakdown for properties
-  const propertiesStatusResult = await supabase
-    .from('properties')
-    .select('status')
-
+  // Status breakdown for properties - optimized: use count aggregation
+  // Instead of fetching all properties, we'll use individual count queries per status
+  // This is more efficient for large datasets
+  const statuses = ['pending', 'active', 'inactive', 'rejected', 'deleted', 'expired', 'rented', 'sold']
   const statusCounts: Record<string, number> = {}
-  propertiesStatusResult.data?.forEach((p: any) => {
-    statusCounts[p.status] = (statusCounts[p.status] || 0) + 1
+  
+  // Fetch counts for each status in parallel
+  const statusCountPromises = statuses.map(async (status) => {
+    const { count } = await supabase
+      .from('properties')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', status)
+    return { status, count: count || 0 }
+  })
+  
+  const statusResults = await Promise.all(statusCountPromises)
+  statusResults.forEach(({ status, count }) => {
+    if (count > 0) {
+      statusCounts[status] = count
+    }
   })
 
   const statusData = Object.entries(statusCounts).map(([name, value]) => ({
@@ -173,11 +345,35 @@ async function getDashboardStats() {
 
 export default function DashboardPage() {
   const t = useTranslations()
+  const router = useRouter()
+  const [followUpStartDate, setFollowUpStartDate] = useState<string>('')
+  const [followUpEndDate, setFollowUpEndDate] = useState<string>('')
   
   const { data: stats, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: getDashboardStats,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes - stats don't need to be real-time
+    gcTime: 15 * 60 * 1000, // Keep in cache for 15 minutes
+    // Refetch in background to keep data fresh without blocking UI
+    refetchInterval: 5 * 60 * 1000, // Refetch every 5 minutes in background
   })
+
+  const { data: followUpLeads, isLoading: isLoadingFollowUps } = useQuery({
+    queryKey: ['follow-up-leads', followUpStartDate, followUpEndDate],
+    queryFn: () => getFollowUpLeads(
+      followUpStartDate || undefined,
+      followUpEndDate || undefined
+    ),
+    staleTime: 30000, // Cache for 30 seconds - balance between freshness and performance
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
+  })
+
+  const handleFollowUpLeadClick = (lead: any) => {
+    const url = lead.leadType === 'lead' 
+      ? `/dashboard/leads?expand=${lead.leadId}`
+      : `/dashboard/direct-leads?expand=${lead.leadId}`
+    router.push(url)
+  }
 
 
   const statCards = [
@@ -294,12 +490,16 @@ export default function DashboardPage() {
               <Link
                 key={index}
                 href={shortcut.href}
-                className="flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-all duration-300 hover:scale-110 hover:shadow-xl group"
+                className="flex flex-col items-center justify-center p-4 rounded-lg border-2 transition-all duration-300 hover:scale-110 hover:shadow-xl group cursor-pointer relative z-10"
                 style={{
                   borderColor: `${shortcut.color}40`,
                   background: document.documentElement.classList.contains('dark')
                     ? 'rgba(0, 0, 0, 0.4)'
                     : 'rgba(255, 255, 255, 0.6)',
+                }}
+                onClick={(e) => {
+                  // Ensure navigation works
+                  e.stopPropagation()
                 }}
               >
                 <div
@@ -310,7 +510,7 @@ export default function DashboardPage() {
                 >
                   <shortcut.icon className="h-5 w-5 text-white" />
                 </div>
-                <span className="text-xs font-medium text-center">{t(`navigation.${shortcut.nameKey}`)}</span>
+                <span className="text-xs font-medium text-center">{t(`navigation.${shortcut.nameKey}`) || shortcut.nameKey}</span>
               </Link>
             ))}
           </div>
@@ -712,6 +912,183 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Follow-Up Leads Section */}
+      <Card className="backdrop-blur-sm border-2 border-gold-dark/20 dark:border-gold-light/20 bg-white/80 dark:bg-black/40">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-xl font-bold flex items-center gap-2">
+                <Calendar className="h-5 w-5" style={{ color: '#fac708' }} />
+                {t('dashboard.followUpLeads') || 'Follow-Up Leads'}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground mt-1">
+                {t('dashboard.followUpLeadsDescription') || 'Leads and direct leads with scheduled follow-up dates'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="follow-up-start-date" className="text-sm whitespace-nowrap">
+                  {t('dashboard.startDate') || 'From Date'}:
+                </Label>
+                <Input
+                  id="follow-up-start-date"
+                  type="date"
+                  value={followUpStartDate}
+                  onChange={(e) => setFollowUpStartDate(e.target.value)}
+                  className="w-40"
+                  style={{
+                    borderColor: 'rgba(250, 199, 8, 0.3)',
+                  }}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Label htmlFor="follow-up-end-date" className="text-sm whitespace-nowrap">
+                  {t('dashboard.endDate') || 'To Date'}:
+                </Label>
+                <Input
+                  id="follow-up-end-date"
+                  type="date"
+                  value={followUpEndDate}
+                  onChange={(e) => setFollowUpEndDate(e.target.value)}
+                  className="w-40"
+                  style={{
+                    borderColor: 'rgba(250, 199, 8, 0.3)',
+                  }}
+                  min={followUpStartDate || undefined}
+                />
+              </div>
+              {(followUpStartDate || followUpEndDate) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFollowUpStartDate('')
+                    setFollowUpEndDate('')
+                  }}
+                  className="text-xs"
+                >
+                  {t('common.clearFilters') || 'Clear'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoadingFollowUps ? (
+            <div className="text-center py-8">
+              <div className="h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+              <p className="text-muted-foreground">{t('common.loading') || 'Loading...'}</p>
+            </div>
+          ) : !followUpLeads || followUpLeads.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              {t('dashboard.noFollowUpLeads') || 'No follow-up leads found'}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {followUpLeads.map((lead: any) => {
+                const isOverdue = lead.daysUntil < 0
+                const isToday = lead.daysUntil === 0
+                const isUpcoming = lead.daysUntil > 0 && lead.daysUntil <= 7
+                
+                return (
+                  <Card
+                    key={lead.id}
+                    onClick={() => handleFollowUpLeadClick(lead)}
+                    className={`border-2 transition-all hover:shadow-lg cursor-pointer hover:scale-[1.01] ${
+                      isOverdue
+                        ? 'border-red-500/50 bg-red-50/50 dark:bg-red-950/20 hover:border-red-500'
+                        : isToday
+                        ? 'border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-950/20 hover:border-yellow-500'
+                        : isUpcoming
+                        ? 'border-orange-500/50 bg-orange-50/50 dark:bg-orange-950/20 hover:border-orange-500'
+                        : 'border-blue-500/50 bg-blue-50/50 dark:bg-blue-950/20 hover:border-blue-500'
+                    }`}
+                  >
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold text-lg">{lead.name}</h4>
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              lead.leadType === 'lead'
+                                ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                                : 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200'
+                            }`}>
+                              {lead.leadType === 'lead' ? (t('dashboard.lead') || 'Lead') : (t('dashboard.directLead') || 'Direct Lead')}
+                            </span>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                            <div className="flex items-center gap-2">
+                              <Phone className="h-4 w-4 text-muted-foreground" />
+                              <span>{lead.phone_number}</span>
+                            </div>
+                            {lead.email && (
+                              <div className="flex items-center gap-2">
+                                <Mail className="h-4 w-4 text-muted-foreground" />
+                                <span>{lead.email}</span>
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <Calendar className="h-4 w-4 text-muted-foreground" />
+                              <span>{new Date(lead.follow_up_date).toLocaleDateString()}</span>
+                            </div>
+                            {lead.assigned_user && (
+                              <div className="flex items-center gap-2">
+                                <User className="h-4 w-4 text-muted-foreground" />
+                                <span>{lead.assigned_user.name}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {lead.notes && (
+                            <div className="text-sm text-muted-foreground mt-2">
+                              <span className="font-medium">{t('dashboard.notes') || 'Notes'}:</span> {lead.notes}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col items-end gap-2">
+                          <div className={`px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-2 ${
+                            isOverdue
+                              ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                              : isToday
+                              ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                              : isUpcoming
+                              ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200'
+                              : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                          }`}>
+                            {isOverdue ? (
+                              <>
+                                <AlertCircle className="h-4 w-4" />
+                                {Math.abs(lead.daysUntil)} {t('dashboard.daysOverdue') || 'days overdue'}
+                              </>
+                            ) : isToday ? (
+                              <>
+                                <Clock className="h-4 w-4" />
+                                {t('dashboard.today') || 'Today'}
+                              </>
+                            ) : (
+                              <>
+                                <Clock className="h-4 w-4" />
+                                {lead.daysUntil} {t('dashboard.daysUntil') || 'days'}
+                              </>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {t('dashboard.action') || 'Action'}: <span className="capitalize">{lead.action}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

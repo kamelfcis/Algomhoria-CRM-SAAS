@@ -18,8 +18,9 @@ interface PermissionsState {
   clearPermissions: () => void
 }
 
-// Cache duration: 10 minutes for maximum performance
-const CACHE_DURATION = 10 * 60 * 1000
+// Cache duration: 2 minutes for better balance between performance and freshness
+// Permissions changes should be reflected quickly
+const CACHE_DURATION = 2 * 60 * 1000
 
 export const usePermissionsStore = create<PermissionsState>((set, get) => ({
   permissions: new Set<string>(),

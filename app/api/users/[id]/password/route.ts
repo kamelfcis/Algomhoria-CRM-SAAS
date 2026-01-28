@@ -3,6 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextRequest, NextResponse } from 'next/server'
 import * as z from 'zod'
 import { isAdmin } from '@/lib/utils/permission-helpers'
+import { rateLimit, rateLimitPresets } from '@/lib/utils/rate-limit'
 
 const changePasswordSchema = z.object({
   newPassword: z.string().min(6, 'Password must be at least 6 characters'),
@@ -17,6 +18,12 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
+    // Apply rate limiting (strict: 10 requests per minute for password changes)
+    const rateLimitResponse = rateLimit(request, rateLimitPresets.strict)
+    if (rateLimitResponse) {
+      return rateLimitResponse
+    }
+
     const supabase = await createClient()
     
     // Check if user is authenticated

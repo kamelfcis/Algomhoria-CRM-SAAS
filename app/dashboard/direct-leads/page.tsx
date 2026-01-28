@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useMemo, useCallback, useEffect } from 'react'
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
@@ -20,6 +21,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
+import { PhoneInputField } from '@/components/ui/phone-input'
 import { Label } from '@/components/ui/label'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -129,45 +131,70 @@ interface DirectLeadActivity {
   }
 }
 
-async function getDirectLeads() {
+async function getDirectLeads(userId?: string | null, isSales?: boolean) {
   const supabase = createClient()
   
-  const { data: leadsData, error: leadsError } = await supabase
+  // Build query with optional filter for sales employees
+  let query = supabase
     .from('direct_leads')
     .select('*, assigned_user:users!direct_leads_assigned_to_fkey(id, name, email)')
+  
+  // Sales employees can only see leads assigned to them
+  // IMPORTANT: Filter at database level for security
+  if (isSales && userId) {
+    query = query.eq('assigned_to', userId)
+  }
+  
+  const { data: leadsData, error: leadsError } = await query
     .order('created_at', { ascending: false })
+    .limit(1000) // Limit to prevent memory issues with large datasets
 
   if (leadsError) {
     console.error('Error fetching direct leads:', leadsError)
     throw leadsError
   }
 
-  // Fetch roles for assigned users
-  const leadsWithRoles = await Promise.all(
-    (leadsData || []).map(async (lead: any) => {
-      if (lead.assigned_user?.id) {
-        const { data: userRoles } = await supabase
-          .from('user_roles')
-          .select(`
-            role_id,
-            roles!inner(name, status)
-          `)
-          .eq('user_id', lead.assigned_user.id)
-        
-        const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
-        const roleName = (activeRole as any)?.roles?.name || 'user'
-        
-        return {
-          ...lead,
-          assigned_user: {
-            ...lead.assigned_user,
-            role: roleName,
-          },
-        }
+  // Get all unique assigned user IDs
+  const assignedUserIds = [...new Set(
+    (leadsData || [])
+      .map((lead: any) => lead.assigned_user?.id)
+      .filter(Boolean)
+  )]
+  
+  // Batch fetch all user roles in a single query (optimize N+1)
+  let rolesByUserId: Record<string, string> = {}
+  if (assignedUserIds.length > 0) {
+    const { data: allUserRoles } = await supabase
+      .from('user_roles')
+      .select(`
+        user_id,
+        role_id,
+        roles!inner(name, status)
+      `)
+      .in('user_id', assignedUserIds)
+    
+    // Group roles by user_id and find active role
+    allUserRoles?.forEach((ur: any) => {
+      if (ur.roles?.status === 'active' && !rolesByUserId[ur.user_id]) {
+        rolesByUserId[ur.user_id] = ur.roles?.name || 'user'
       }
-      return lead
     })
-  )
+  }
+  
+  // Map roles to leads
+  const leadsWithRoles = (leadsData || []).map((lead: any) => {
+    if (lead.assigned_user?.id) {
+      const roleName = rolesByUserId[lead.assigned_user.id] || 'user'
+      return {
+        ...lead,
+        assigned_user: {
+          ...lead.assigned_user,
+          role: roleName,
+        },
+      }
+    }
+    return lead
+  })
 
   return leadsWithRoles as DirectLead[]
 }
@@ -179,31 +206,36 @@ async function getUsers() {
     .select('id, name, email')
     .eq('status', 'active')
   
-  if (error || !users) return []
+  if (error || !users || users.length === 0) return []
   
-  // Fetch roles and filter by role names
-  const usersWithRoles = await Promise.all(
-    users.map(async (user: any) => {
-      const { data: userRoles } = await supabase
-        .from('user_roles')
-        .select(`
-          role_id,
-          roles!inner(name, status)
-        `)
-        .eq('user_id', user.id)
-      
-      const activeRole = userRoles?.find((ur: any) => ur.roles?.status === 'active')
-      const roleName = (activeRole as any)?.roles?.name || 'user'
-      
-      return {
-        ...user,
-        role: roleName,
-      }
-    })
-  )
+  // Batch fetch all user roles in a single query (optimize N+1)
+  const userIds = users.map(u => u.id)
+  const { data: allUserRoles } = await supabase
+    .from('user_roles')
+    .select(`
+      user_id,
+      role_id,
+      roles!inner(name, status)
+    `)
+    .in('user_id', userIds)
   
-  // Filter by allowed roles
-  return usersWithRoles.filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
+  // Group roles by user_id and find active role
+  const rolesByUserId: Record<string, string> = {}
+  allUserRoles?.forEach((ur: any) => {
+    if (ur.roles?.status === 'active' && !rolesByUserId[ur.user_id]) {
+      rolesByUserId[ur.user_id] = ur.roles?.name || 'user'
+    }
+  })
+  
+  // Map roles to users and filter by allowed roles
+  const usersWithRoles = users
+    .map((user: any) => ({
+      ...user,
+      role: rolesByUserId[user.id] || 'user',
+    }))
+    .filter((u: any) => ['admin', 'sales', 'moderator'].includes(u.role))
+  
+  return usersWithRoles
 }
 
 async function updateDirectLead(id: string, leadData: Partial<DirectLeadUpdateForm>) {
@@ -408,6 +440,9 @@ export default function DirectLeadsPage() {
   const { profile, user } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const expandedRowRef = useRef<HTMLDivElement | null>(null)
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [statusFilter, setStatusFilter] = useState<string>('all')
@@ -423,15 +458,33 @@ export default function DirectLeadsPage() {
   // Check permissions
   const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('direct_leads')
 
+  // Check if user has sales role (for filtering purposes)
+  // Use profile role directly for more reliable detection
+  // Sales users have create/edit permissions but NOT delete permissions
+  // Admins have all permissions including delete, so they should see all leads
+  const isSales = useMemo(() => {
+    // First check profile role directly
+    if (profile?.role === 'sales') {
+      return true
+    }
+    // Fallback: If user has delete permissions, they're an admin and should see all leads
+    // Only apply sales filter if user has create/edit but NOT delete permissions
+    return (canCreate || canEdit) && !canDelete
+  }, [profile?.role, canCreate, canEdit, canDelete])
+
   const { data: directLeads, isLoading } = useQuery({
-    queryKey: ['direct-leads'],
-    queryFn: getDirectLeads,
-    enabled: canView, // Only fetch if user has view permission
+    queryKey: ['direct-leads', profile?.id, isSales, profile?.role],
+    queryFn: () => getDirectLeads(profile?.id, isSales),
+    enabled: canView && !!profile?.id, // Only fetch if user has view permission and profile is loaded
+    staleTime: 30000, // Cache for 30 seconds - balance between freshness and performance
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   })
 
   const { data: users } = useQuery({
     queryKey: ['users-for-assignment'],
     queryFn: getUsers,
+    staleTime: 2 * 60 * 1000, // Cache for 2 minutes - users don't change frequently
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
   })
 
   const updateMutation = useMutation({
@@ -502,6 +555,7 @@ export default function DirectLeadsPage() {
     formState: { errors },
     reset,
     setValue,
+    watch,
   } = useForm<DirectLeadUpdateForm>({
     resolver: zodResolver(directLeadUpdateSchema),
   })
@@ -512,6 +566,7 @@ export default function DirectLeadsPage() {
     formState: { errors: createErrors },
     reset: createReset,
     setValue: createSetValue,
+    watch: createWatch,
   } = useForm<DirectLeadCreateForm>({
     resolver: zodResolver(directLeadCreateSchema),
     defaultValues: {
@@ -540,7 +595,7 @@ export default function DirectLeadsPage() {
     createMutation.mutate(data)
   }
 
-  const handleToggleExpand = useCallback((lead: DirectLead) => {
+  const handleToggleExpand = useCallback((lead: DirectLead, scrollTo = false) => {
     if (expandedRowId === lead.id) {
       setExpandedRowId(null)
       reset()
@@ -551,12 +606,31 @@ export default function DirectLeadsPage() {
       setValue('email', lead.email || '')
       setValue('message', lead.message || '')
       setValue('source', lead.source || '')
-    setValue('status', lead.status as any)
-    setValue('priority', lead.priority as any)
-    setValue('assigned_to', lead.assigned_to || undefined)
-    setValue('notes', lead.notes || '')
-  }
+      setValue('status', lead.status as any)
+      setValue('priority', lead.priority as any)
+      setValue('assigned_to', lead.assigned_to || undefined)
+      setValue('notes', lead.notes || '')
+      
+      if (scrollTo) {
+        setTimeout(() => {
+          expandedRowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }, 100)
+      }
+    }
   }, [expandedRowId, reset, setValue])
+
+  // Handle expand parameter from URL
+  useEffect(() => {
+    const expandId = searchParams.get('expand')
+    if (expandId && directLeads && !expandedRowId) {
+      const leadToExpand = directLeads.find((l: DirectLead) => l.id === expandId)
+      if (leadToExpand) {
+        handleToggleExpand(leadToExpand, true)
+        // Remove the expand parameter from URL
+        router.replace('/dashboard/direct-leads', { scroll: false })
+      }
+    }
+  }, [searchParams, directLeads, expandedRowId, handleToggleExpand, router])
 
   const handleDelete = (lead: DirectLead) => {
     setLeadToDelete(lead)
@@ -568,15 +642,6 @@ export default function DirectLeadsPage() {
       deleteMutation.mutate(leadToDelete.id)
     }
   }
-
-  // Check if user has sales role (for filtering purposes)
-  // Sales users have create/edit permissions but NOT delete permissions
-  // Admins have all permissions including delete, so they should see all leads
-  const isSales = useMemo(() => {
-    // If user has delete permissions, they're an admin and should see all leads
-    // Only apply sales filter if user has create/edit but NOT delete permissions
-    return (canCreate || canEdit) && !canDelete
-  }, [canCreate, canEdit, canDelete])
 
   // Memoized color functions
   const getPriorityColor = useCallback((priority: string) => {
@@ -614,15 +679,12 @@ export default function DirectLeadsPage() {
   }, [])
 
   // Filter and search leads - memoized for performance
+  // Note: Sales employees are already filtered at the database level,
+  // but we still need to apply other filters (status, priority, search, etc.)
   const filteredLeads = useMemo(() => {
     if (!directLeads) return []
     
     return directLeads.filter((lead: DirectLead) => {
-      // Sales users can only see leads assigned to them
-      if (isSales && lead.assigned_to !== profile?.id) {
-        return false
-      }
-      
     if (statusFilter !== 'all' && lead.status !== statusFilter) return false
     if (priorityFilter !== 'all' && lead.priority !== priorityFilter) return false
       
@@ -647,7 +709,7 @@ export default function DirectLeadsPage() {
       }
     return true
   })
-  }, [directLeads, isSales, profile?.id, profile?.role, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
+  }, [directLeads, statusFilter, priorityFilter, assignedToFilter, searchQuery, canEdit])
 
   const columns = useMemo(() => [
     {
@@ -727,6 +789,8 @@ export default function DirectLeadsPage() {
     queryKey: ['direct-lead-activities', expandedRowId],
     queryFn: () => expandedRowId ? getDirectLeadActivities(expandedRowId) : [],
     enabled: !!expandedRowId,
+    staleTime: 10000, // Cache for 10 seconds - activities can change frequently
+    gcTime: 2 * 60 * 1000, // Keep in cache for 2 minutes
   })
 
   const activityMutation = useMutation({
@@ -943,10 +1007,14 @@ export default function DirectLeadsPage() {
 
                     <div className="space-y-2">
                       <Label htmlFor="create-phone">{t('directLeads.phone') || 'Phone'} *</Label>
-                      <Input
+                      <PhoneInputField
                         id="create-phone"
-                        {...createRegister('phone_number')}
+                        name="phone_number"
+                        value={createWatch('phone_number') || ''}
+                        onChange={(value) => createSetValue('phone_number', value, { shouldValidate: true })}
                         disabled={createMutation.isPending}
+                        placeholder="Enter phone number"
+                        error={!!createErrors.phone_number}
                       />
                       {createErrors.phone_number && (
                         <p className="text-xs text-destructive">{createErrors.phone_number.message}</p>
@@ -1121,6 +1189,7 @@ export default function DirectLeadsPage() {
                           const isExpanded = expandedRowId === lead.id
                           return (
                             <React.Fragment key={lead.id}>
+                              {isExpanded && <div ref={expandedRowRef} />}
                               <TableRow className={cn(
                                 "transition-all duration-300 hover:bg-muted/50 animate-in fade-in-50 slide-in-from-left-4 hover:shadow-sm",
                                 isExpanded && 'bg-muted/50'
@@ -1215,10 +1284,14 @@ export default function DirectLeadsPage() {
 
                                           <div className="space-y-2">
                                             <Label htmlFor={`phone-${lead.id}`}>{t('directLeads.phone') || 'Phone'} *</Label>
-                                            <Input
+                                            <PhoneInputField
                                               id={`phone-${lead.id}`}
-                                              {...register('phone_number')}
+                                              name="phone_number"
+                                              value={watch('phone_number') || ''}
+                                              onChange={(value) => setValue('phone_number', value, { shouldValidate: true })}
                                               disabled={updateMutation.isPending}
+                                              placeholder="Enter phone number"
+                                              error={!!errors.phone_number}
                                             />
                                             {errors.phone_number && (
                                               <p className="text-xs text-destructive">{errors.phone_number.message}</p>
@@ -1578,6 +1651,7 @@ export default function DirectLeadsPage() {
                     const isExpanded = expandedRowId === lead.id
                     return (
                       <React.Fragment key={lead.id}>
+                        {isExpanded && <div ref={expandedRowRef} />}
                         <Card className={cn(
                           "relative backdrop-blur-sm border-2 border-gold-dark/20 dark:border-gold-light/20 bg-white/80 dark:bg-black/40",
                           "transition-all duration-300 hover:shadow-xl hover:scale-[1.02] hover:border-primary/50",

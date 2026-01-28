@@ -155,8 +155,8 @@ export default function LoginPage() {
       // Log login activity (don't await - let it run in background)
       ActivityLogger.login(authData.user.id, authData.user.email || '')
 
-      // Redirect to dashboard
-      router.push('/dashboard')
+      // Redirect to admin
+      router.push('/admin')
     } catch (err) {
       setError(t('auth.loginError'))
       setIsLoading(false)
