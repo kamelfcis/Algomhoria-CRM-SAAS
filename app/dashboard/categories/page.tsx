@@ -48,7 +48,7 @@ const categorySchema = z.object({
   title_ar: z.string().min(1, 'Title (Arabic) is required'),
   title_en: z.string().min(1, 'Title (English) is required'),
   order_index: z.number().int().min(0).default(0),
-  status: z.enum(['draft', 'pending', 'active', 'inactive']),
+  status: z.enum(['active', 'inactive']),
 })
 
 type CategoryForm = z.infer<typeof categorySchema>
@@ -74,6 +74,12 @@ async function getCategories() {
 }
 
 async function createCategory(categoryData: CategoryForm) {
+  // Check for duplicate titles
+  const titleExists = await checkTitleExists(categoryData.title_en, categoryData.title_ar)
+  if (titleExists) {
+    throw new Error('A category with this title already exists. Please use a different title.')
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('categories')
@@ -87,6 +93,25 @@ async function createCategory(categoryData: CategoryForm) {
 
 async function updateCategory(id: string, categoryData: Partial<CategoryForm>) {
   const supabase = createClient()
+  
+  // Check for duplicate titles if title fields are being updated
+  if (categoryData.title_en || categoryData.title_ar) {
+    // Get current category to check both titles
+    const { data: currentCategory } = await supabase
+      .from('categories')
+      .select('title_en, title_ar')
+      .eq('id', id)
+      .single()
+    
+    const titleEn = categoryData.title_en ?? currentCategory?.title_en ?? ''
+    const titleAr = categoryData.title_ar ?? currentCategory?.title_ar ?? ''
+    
+    const titleExists = await checkTitleExists(titleEn, titleAr, id)
+    if (titleExists) {
+      throw new Error('A category with this title already exists. Please use a different title.')
+    }
+  }
+
   const { data, error } = await supabase
     .from('categories')
     .update(categoryData)
@@ -96,6 +121,46 @@ async function updateCategory(id: string, categoryData: Partial<CategoryForm>) {
 
   if (error) throw error
   return data
+}
+
+async function checkTitleExists(titleEn: string, titleAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  
+  // Check if title_en already exists
+  let queryEn = supabase
+    .from('categories')
+    .select('id')
+    .eq('title_en', titleEn)
+    .limit(1)
+  
+  if (excludeId) {
+    queryEn = queryEn.neq('id', excludeId)
+  }
+  
+  const { data: dataEn, error: errorEn } = await queryEn
+  
+  // Check if title_ar already exists
+  let queryAr = supabase
+    .from('categories')
+    .select('id')
+    .eq('title_ar', titleAr)
+    .limit(1)
+  
+  if (excludeId) {
+    queryAr = queryAr.neq('id', excludeId)
+  }
+  
+  const { data: dataAr, error: errorAr } = await queryAr
+  
+  if (errorEn || errorAr) {
+    // If there's an error, still check the results
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  
+  // Return true if either title exists
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
 }
 
 async function checkCategoryHasPosts(categoryId: string) {
@@ -151,7 +216,7 @@ export default function CategoriesPage() {
         title_ar: '',
         title_en: '',
         order_index: 0,
-        status: 'draft',
+        status: 'active',
       })
       // Log activity
       if (data?.id) {
@@ -188,7 +253,7 @@ export default function CategoriesPage() {
         title_ar: '',
         title_en: '',
         order_index: 0,
-        status: 'draft',
+        status: 'active',
       })
       // Log activity
       if (previousCategory && data?.id) {
@@ -258,7 +323,7 @@ export default function CategoriesPage() {
       title_ar: '',
       title_en: '',
       order_index: 0,
-      status: 'draft',
+      status: 'active',
     },
   })
 
@@ -278,7 +343,7 @@ export default function CategoriesPage() {
       title_ar: category.title_ar,
       title_en: category.title_en,
       order_index: category.order_index,
-      status: category.status as 'draft' | 'pending' | 'active' | 'inactive',
+      status: category.status as 'active' | 'inactive',
     })
     setIsDialogOpen(true)
   }
@@ -326,7 +391,7 @@ export default function CategoriesPage() {
         title_ar: '',
         title_en: '',
         order_index: 0,
-        status: 'draft',
+        status: 'active',
       })
     }
   }
@@ -497,18 +562,14 @@ export default function CategoriesPage() {
                 <Label htmlFor="status">{t('categories.status')}</Label>
                 <Select
                   value={selectedStatus}
-                  onValueChange={(value) => setValue('status', value as 'draft' | 'pending' | 'active' | 'inactive', { shouldValidate: true })}
+                  onValueChange={(value) => setValue('status', value as 'active' | 'inactive', { shouldValidate: true })}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder={t('categories.selectStatus') || 'Select status'} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    {profile?.role === 'admin' && (
-                      <SelectItem value="active">Active</SelectItem>
-                    )}
+                    <SelectItem value="active">Active</SelectItem>
                     <SelectItem value="inactive">Inactive</SelectItem>
                   </SelectContent>
                 </Select>

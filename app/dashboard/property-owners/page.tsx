@@ -48,7 +48,7 @@ import { PhoneInputField } from '@/components/ui/phone-input'
 const propertyOwnerSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   phone_number: z.string().min(1, 'Phone number is required'),
-  email: z.string().email().optional().nullable(),
+  email: z.union([z.string().email(), z.literal('')]).nullable().optional(),
   status: z.enum(['active', 'inactive', 'suspended']),
 })
 

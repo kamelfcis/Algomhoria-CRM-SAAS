@@ -411,6 +411,7 @@ export default function PostsPage() {
 
   const isFeatured = watch('is_featured')
   const isBreakingNews = watch('is_breaking_news')
+  const selectedCategoryId = watch('category_id')
 
   const onSubmit = (data: PostForm) => {
     if (editingPost) {
@@ -527,6 +528,20 @@ export default function PostsPage() {
         { value: 'active', label: 'Active' },
         { value: 'inactive', label: 'Inactive' },
       ],
+    },
+    {
+      key: 'category_id',
+      label: t('posts.category') || 'Category',
+      type: 'select' as const,
+      options: categories
+        ? [
+            { value: 'none', label: 'No Category' },
+            ...categories.map((cat: any) => ({
+              value: cat.id,
+              label: `${cat.title_en} / ${cat.title_ar}`,
+            })),
+          ]
+        : [],
     },
   ]
 
@@ -689,9 +704,8 @@ export default function PostsPage() {
               <div className="space-y-2">
                 <Label htmlFor="category_id">{t('posts.category')}</Label>
                 <Select
-                  onValueChange={(value) => setValue('category_id', value === 'none' ? undefined : value)}
-                  value={editingPost?.category_id || 'none'}
-                  defaultValue={editingPost?.category_id || 'none'}
+                  onValueChange={(value) => setValue('category_id', value === 'none' ? null : value, { shouldValidate: true })}
+                  value={selectedCategoryId || 'none'}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   <SelectTrigger>

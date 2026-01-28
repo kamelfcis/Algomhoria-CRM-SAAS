@@ -95,6 +95,11 @@ export function DataTable<T extends Record<string, any>>({
   const [showFilters, setShowFilters] = useState(false)
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set())
 
+  // Helper function to get nested property value
+  const getNestedValue = (obj: any, path: string): any => {
+    return path.split('.').reduce((current, prop) => current?.[prop], obj)
+  }
+
   // Filter data based on search
   const filteredBySearch = useMemo(() => {
     if (!searchQuery || !searchKey) return data || []
@@ -103,7 +108,9 @@ export function DataTable<T extends Record<string, any>>({
     
     return (data || []).filter((item) => {
       return searchKeys.some((key) => {
-        const value = item[key]
+        const value = typeof key === 'string' && key.includes('.') 
+          ? getNestedValue(item, key)
+          : item[key]
         return value?.toString().toLowerCase().includes(searchQuery.toLowerCase())
       })
     })
@@ -117,6 +124,10 @@ export function DataTable<T extends Record<string, any>>({
       return Object.entries(activeFilters).every(([key, value]) => {
         if (!value || value === 'all') return true
         const itemValue = item[key]
+        // Handle "none" filter for null/undefined values
+        if (value === 'none') {
+          return itemValue === null || itemValue === undefined || itemValue === ''
+        }
         return itemValue?.toString() === value || itemValue?.toString().toLowerCase().includes(value.toLowerCase())
       })
     })

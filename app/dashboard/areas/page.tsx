@@ -7,8 +7,9 @@ import { useTranslations } from '@/hooks/use-translations'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
-import { Plus, Pencil, Trash2, ArrowUp, ArrowDown } from 'lucide-react'
+import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, Trash } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { useLanguageStore } from '@/store/language-store'
 import { usePermissions } from '@/hooks/use-permissions'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { useToast } from '@/hooks/use-toast'
@@ -93,27 +94,58 @@ async function getGovernorates() {
   return data
 }
 
+async function checkNameExists(nameEn: string, nameAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  let queryEn = supabase.from('areas').select('id').eq('name_en', nameEn).limit(1)
+  if (excludeId) queryEn = queryEn.neq('id', excludeId)
+  const { data: dataEn, error: errorEn } = await queryEn
+  let queryAr = supabase.from('areas').select('id').eq('name_ar', nameAr).limit(1)
+  if (excludeId) queryAr = queryAr.neq('id', excludeId)
+  const { data: dataAr, error: errorAr } = await queryAr
+  if (errorEn || errorAr) {
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
+}
+
 async function createArea(areaData: AreaForm) {
+  const nameExists = await checkNameExists(areaData.name_en, areaData.name_ar)
+  if (nameExists) {
+    throw new Error('An area with this name already exists. Please use a different name.')
+  }
   const supabase = createClient()
   const { data, error } = await supabase
     .from('areas')
     .insert(areaData)
     .select()
     .single()
-
   if (error) throw error
   return data
 }
 
 async function updateArea(id: string, areaData: Partial<AreaForm>) {
   const supabase = createClient()
+  if (areaData.name_en || areaData.name_ar) {
+    const { data: currentArea } = await supabase
+      .from('areas')
+      .select('name_en, name_ar')
+      .eq('id', id)
+      .single()
+    const nameEn = areaData.name_en ?? currentArea?.name_en ?? ''
+    const nameAr = areaData.name_ar ?? currentArea?.name_ar ?? ''
+    const nameExists = await checkNameExists(nameEn, nameAr, id)
+    if (nameExists) {
+      throw new Error('An area with this name already exists. Please use a different name.')
+    }
+  }
   const { data, error } = await supabase
     .from('areas')
     .update(areaData)
     .eq('id', id)
     .select()
     .single()
-
   if (error) throw error
   return data
 }
@@ -176,6 +208,7 @@ async function updateAreaOrder(id: string, newOrder: number) {
 
 export default function AreasPage() {
   const t = useTranslations()
+  const { language } = useLanguageStore()
   const { profile } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -183,6 +216,9 @@ export default function AreasPage() {
   const [editingArea, setEditingArea] = useState<Area | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [areaToDelete, setAreaToDelete] = useState<Area | null>(null)
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [selectedIdsForBulkDelete, setSelectedIdsForBulkDelete] = useState<string[]>([])
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   const [governorateFilter, setGovernorateFilter] = useState<string>('all')
   
   // Check permissions
@@ -441,6 +477,92 @@ export default function AreasPage() {
     }
   }
 
+  const handleBulkDelete = async () => {
+    if (selectedIdsForBulkDelete.length === 0) return
+    
+    setIsBulkDeleting(true)
+    const deletedIds: string[] = []
+    const failedIds: string[] = []
+    const cannotDeleteIds: string[] = []
+    
+    try {
+      for (const id of selectedIdsForBulkDelete) {
+        try {
+          const hasReferences = await checkAreaHasReferences(id)
+          if (hasReferences) {
+            cannotDeleteIds.push(id)
+            continue
+          }
+          await deleteArea(id)
+          deletedIds.push(id)
+        } catch (error: any) {
+          failedIds.push(id)
+        }
+      }
+      
+      queryClient.invalidateQueries({ queryKey: ['areas'] })
+      
+      const total = selectedIdsForBulkDelete.length
+      const successCount = deletedIds.length
+      const failedCount = failedIds.length
+      const cannotDeleteCount = cannotDeleteIds.length
+      
+      if (successCount > 0) {
+        toast({
+          title: t('common.success') === 'common.success'
+            ? (language === 'ar' ? 'نجاح' : 'Success')
+            : t('common.success'),
+          description: successCount === total
+            ? (t('areas.bulkDeletedSuccess') === 'areas.bulkDeletedSuccess'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} ${successCount === 1 ? 'منطقة بنجاح' : 'مناطق بنجاح'}`
+                : `${successCount} ${successCount === 1 ? 'area has' : 'areas have'} been deleted successfully.`
+              : t('areas.bulkDeletedSuccess'))
+            : (t('areas.bulkDeletedPartial') === 'areas.bulkDeletedPartial'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} من ${total} منطقة بنجاح`
+                : `${successCount} of ${total} areas deleted successfully.`
+              : t('areas.bulkDeletedPartial')),
+          variant: 'success',
+        })
+      }
+      
+      if (cannotDeleteCount > 0) {
+        toast({
+          title: t('common.warning') === 'common.warning'
+            ? (language === 'ar' ? 'تحذير' : 'Warning')
+            : t('common.warning'),
+          description: t('areas.cannotDeleteSome') === 'areas.cannotDeleteSome'
+            ? language === 'ar'
+              ? `لا يمكن حذف ${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'منطقة لأنها' : 'مناطق لأنها'} مستخدمة في عقارات أو شوارع أو مناطق مميزة`
+              : `${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'area cannot' : 'areas cannot'} be deleted because ${cannotDeleteCount === 1 ? 'it is' : 'they are'} used in properties, streets, or featured areas.`
+            : t('areas.cannotDeleteSome'),
+          variant: 'destructive',
+          duration: 6000,
+        })
+      }
+      
+      if (failedCount > 0) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('areas.bulkDeleteFailed') || `Failed to delete ${failedCount} ${failedCount === 1 ? 'area' : 'areas'}. Please try again. / فشل حذف ${failedCount} ${failedCount === 1 ? 'منطقة' : 'مناطق'}. يرجى المحاولة مرة أخرى`,
+          variant: 'destructive',
+        })
+      }
+      
+      setBulkDeleteDialogOpen(false)
+      setSelectedIdsForBulkDelete([])
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('areas.bulkDeleteError') || 'An error occurred during bulk delete. Please try again. / حدث خطأ أثناء الحذف الجماعي. يرجى المحاولة مرة أخرى',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
+
   if (isLoading || isCheckingPermissions) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
   }
@@ -591,8 +713,20 @@ export default function AreasPage() {
             data={filteredAreas}
             columns={columns}
             isLoading={isLoading}
-            searchKey="name_ar"
+            searchKey={['name_ar', 'name_en', 'status', 'governorates.name_ar', 'governorates.name_en']}
             searchPlaceholder={t('common.search')}
+            enableSelection={canDelete}
+            bulkActions={canDelete ? [
+              {
+                label: t('common.delete') || 'Delete Selected',
+                action: (selectedIds: string[]) => {
+                  setSelectedIdsForBulkDelete(selectedIds)
+                  setBulkDeleteDialogOpen(true)
+                },
+                variant: 'destructive',
+                icon: <Trash className="h-4 w-4" />,
+              },
+            ] : []}
             actions={(area) => (
               <div className="flex gap-2">
                 {canEdit && (
@@ -755,6 +889,42 @@ export default function AreasPage() {
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('common.confirmBulkDelete') === 'common.confirmBulkDelete'
+                ? (language === 'ar' ? 'تأكيد الحذف الجماعي' : 'Confirm Bulk Delete')
+                : t('common.confirmBulkDelete')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('areas.bulkDeleteConfirm') === 'areas.bulkDeleteConfirm'
+                ? language === 'ar'
+                  ? `هل أنت متأكد من حذف ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'منطقة' : 'مناطق'}؟ لا يمكن التراجع عن هذا الإجراء`
+                  : `Are you sure you want to delete ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'area' : 'areas'}? This action cannot be undone.`
+                : t('areas.bulkDeleteConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              onClick={() => {
+                setSelectedIdsForBulkDelete([])
+              }}
+              disabled={isBulkDeleting}
+            >
+              {t('common.cancel') || 'Cancel / إلغاء'}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? (t('common.deleting') || 'Deleting... / جاري الحذف...') : (t('common.delete') || 'Delete / حذف')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

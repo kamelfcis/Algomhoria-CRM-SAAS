@@ -43,6 +43,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { ImageUpload } from '@/components/ui/image-upload'
 import { PageSkeleton } from '@/components/ui/page-skeleton'
 
@@ -157,6 +158,7 @@ export default function PostGalleryPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [editingImage, setEditingImage] = useState<PostGalleryImage | null>(null)
   const [postFilter, setPostFilter] = useState<string>('all')
+  const [postSearchQuery, setPostSearchQuery] = useState<string>('')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [imageToDelete, setImageToDelete] = useState<PostGalleryImage | null>(null)
 
@@ -448,21 +450,6 @@ export default function PostGalleryPage() {
     },
   ]
 
-  const filters = [
-    {
-      key: 'post_id',
-      label: t('posts.title') || 'Post',
-      type: 'select' as const,
-      options: [
-        { value: 'all', label: t('common.all') || 'All' },
-        ...(posts?.map((post: any) => ({
-          value: post.id,
-          label: `${post.title_en || post.title_ar}${post.title_ar && post.title_en ? ` / ${post.title_ar}` : ''}`,
-        })) || []),
-      ],
-    },
-  ]
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -487,22 +474,20 @@ export default function PostGalleryPage() {
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
             <Label htmlFor="post-filter">{t('posts.title') || 'Filter by Post'}</Label>
-            <Select
+            <SearchableSelect
               value={postFilter}
               onValueChange={setPostFilter}
-            >
-              <SelectTrigger className="w-[300px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('common.all') || 'All Posts'}</SelectItem>
-                {posts?.map((post: any) => (
-                  <SelectItem key={post.id} value={post.id}>
-                    {post.title_en || post.title_ar} {post.title_ar && post.title_en ? ` / ${post.title_ar}` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder={t('common.all') || 'All Posts'}
+              searchPlaceholder={t('common.search') || 'Search posts...'}
+              className="w-[300px]"
+              options={[
+                { value: 'all', label: t('common.all') || 'All Posts' },
+                ...(posts?.map((post: any) => ({
+                  value: post.id,
+                  label: `${post.title_en || post.title_ar}${post.title_ar && post.title_en ? ` / ${post.title_ar}` : ''}`,
+                })) || []),
+              ]}
+            />
           </div>
         </CardContent>
       </Card>
@@ -518,7 +503,6 @@ export default function PostGalleryPage() {
             isLoading={isLoading}
             searchKey={['alt_text_en', 'alt_text_ar']}
             searchPlaceholder={t('common.search')}
-            filters={filters}
             actions={(image) => (
               <div className="flex gap-2">
                 {canEdit && (

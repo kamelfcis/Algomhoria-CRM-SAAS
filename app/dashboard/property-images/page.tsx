@@ -43,6 +43,7 @@ import {
 } from '@/components/ui/select'
 import { ImageUpload } from '@/components/ui/image-upload'
 import { PageSkeleton } from '@/components/ui/page-skeleton'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 
 const propertyImageSchema = z.object({
   property_id: z.string().uuid('Please select a property'),
@@ -421,21 +422,6 @@ export default function PropertyImagesPage() {
     },
   ]
 
-  const filters = [
-    {
-      key: 'property_id',
-      label: t('properties.title') || 'Property',
-      type: 'select' as const,
-      options: [
-        { value: 'all', label: t('common.all') || 'All' },
-        ...(properties?.map((prop: any) => ({
-          value: prop.id,
-          label: `${prop.title_en || prop.title_ar}${prop.code ? ` (${prop.code})` : ''}`,
-        })) || []),
-      ],
-    },
-  ]
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -460,22 +446,20 @@ export default function PropertyImagesPage() {
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
             <Label htmlFor="property-filter">{t('properties.title') || 'Filter by Property'}</Label>
-            <Select
+            <SearchableSelect
               value={propertyFilter}
               onValueChange={setPropertyFilter}
-            >
-              <SelectTrigger className="w-[300px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t('common.all') || 'All Properties'}</SelectItem>
-                {properties?.map((prop: any) => (
-                  <SelectItem key={prop.id} value={prop.id}>
-                    {prop.title_en || prop.title_ar} {prop.code ? `(${prop.code})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder={t('common.all') || 'All Properties'}
+              searchPlaceholder={t('common.search') || 'Search properties...'}
+              className="w-[300px]"
+              options={[
+                { value: 'all', label: t('common.all') || 'All Properties' },
+                ...(properties?.map((prop: any) => ({
+                  value: prop.id,
+                  label: `${prop.title_en || prop.title_ar}${prop.code ? ` (${prop.code})` : ''}`,
+                })) || []),
+              ]}
+            />
           </div>
         </CardContent>
       </Card>
@@ -491,7 +475,6 @@ export default function PropertyImagesPage() {
             isLoading={isLoading}
             searchKey={['alt_text_en', 'alt_text_ar']}
             searchPlaceholder={t('common.search')}
-            filters={filters}
             actions={(image) => (
               <div className="flex gap-2">
                 {canEdit && (

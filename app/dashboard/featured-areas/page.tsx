@@ -42,6 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { PageSkeleton } from '@/components/ui/page-skeleton'
 
 const featuredAreaSchema = z.object({
@@ -108,7 +109,31 @@ async function getAreasByGovernorate(governorateId: string) {
   return data
 }
 
+async function checkAreaExists(areaId: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  let query = supabase
+    .from('featured_areas')
+    .select('id')
+    .eq('area_id', areaId)
+    .limit(1)
+
+  if (excludeId) {
+    query = query.neq('id', excludeId)
+  }
+
+  const { data, error } = await query
+
+  if (error) throw error
+  return Boolean(data && data.length > 0)
+}
+
 async function createFeaturedArea(areaData: FeaturedAreaForm) {
+  // Check if area already exists
+  const areaExists = await checkAreaExists(areaData.area_id)
+  if (areaExists) {
+    throw new Error('This area is already in the featured areas list. Please select a different area.')
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('featured_areas')
@@ -124,6 +149,14 @@ async function createFeaturedArea(areaData: FeaturedAreaForm) {
 }
 
 async function updateFeaturedArea(id: string, areaData: Partial<FeaturedAreaForm>) {
+  // Check if area_id is being updated and if it already exists
+  if (areaData.area_id) {
+    const areaExists = await checkAreaExists(areaData.area_id, id)
+    if (areaExists) {
+      throw new Error('This area is already in the featured areas list. Please select a different area.')
+    }
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('featured_areas')
@@ -308,6 +341,7 @@ export default function FeaturedAreasPage() {
   })
 
   const watchedGovernorate = watch('governorate_id')
+  const watchedArea = watch('area_id')
 
   // Update areas when governorate changes
   useEffect(() => {
@@ -481,7 +515,7 @@ export default function FeaturedAreasPage() {
             data={featuredAreas}
             columns={columns}
             isLoading={isLoading}
-            searchKey="governorates.name_ar"
+            searchKey={['governorates.name_ar', 'governorates.name_en', 'areas.name_ar', 'areas.name_en', 'status']}
             searchPlaceholder={t('common.search')}
             actions={(area) => (
               <div className="flex gap-2">
@@ -522,26 +556,21 @@ export default function FeaturedAreasPage() {
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="governorate_id">{t('featuredAreas.governorate') || 'Governorate'}</Label>
-              <Select
+              <SearchableSelect
+                value={watchedGovernorate || ''}
                 onValueChange={(value) => {
-                  setValue('governorate_id', value)
+                  setValue('governorate_id', value, { shouldValidate: true })
                   setSelectedGovernorate(value)
-                  setValue('area_id', '')
+                  setValue('area_id', '', { shouldValidate: true })
                 }}
-                defaultValue={editingArea?.governorate_id}
+                placeholder={t('featuredAreas.governorate') || 'Select governorate'}
+                searchPlaceholder={t('common.search') || 'Search governorates...'}
                 disabled={createMutation.isPending || updateMutation.isPending}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select governorate" />
-                </SelectTrigger>
-                <SelectContent>
-                  {governorates?.map((gov: any) => (
-                    <SelectItem key={gov.id} value={gov.id}>
-                      {gov.name_ar} ({gov.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={governorates?.map((gov: any) => ({
+                  value: gov.id,
+                  label: `${gov.name_ar} (${gov.name_en})`,
+                })) || []}
+              />
               {errors.governorate_id && (
                 <p className="text-sm text-destructive">{errors.governorate_id.message}</p>
               )}
@@ -549,22 +578,17 @@ export default function FeaturedAreasPage() {
 
             <div className="space-y-2">
               <Label htmlFor="area_id">{t('featuredAreas.area') || 'Area'}</Label>
-              <Select
-                onValueChange={(value) => setValue('area_id', value)}
-                defaultValue={editingArea?.area_id}
+              <SearchableSelect
+                value={watchedArea || ''}
+                onValueChange={(value) => setValue('area_id', value, { shouldValidate: true })}
+                placeholder={t('featuredAreas.area') || 'Select area'}
+                searchPlaceholder={t('common.search') || 'Search areas...'}
                 disabled={createMutation.isPending || updateMutation.isPending || !selectedGovernorate}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select area" />
-                </SelectTrigger>
-                <SelectContent>
-                  {areas?.map((area: any) => (
-                    <SelectItem key={area.id} value={area.id}>
-                      {area.name_ar} ({area.name_en})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={areas?.map((area: any) => ({
+                  value: area.id,
+                  label: `${area.name_ar} (${area.name_en})`,
+                })) || []}
+              />
               {errors.area_id && (
                 <p className="text-sm text-destructive">{errors.area_id.message}</p>
               )}

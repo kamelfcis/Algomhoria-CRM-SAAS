@@ -9,8 +9,9 @@ import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Trash } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { useLanguageStore } from '@/store/language-store'
 import { usePermissions } from '@/hooks/use-permissions'
 import {
   Dialog,
@@ -72,27 +73,58 @@ async function getPaymentMethods() {
   return data as PaymentMethod[]
 }
 
+async function checkNameExists(nameEn: string, nameAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  let queryEn = supabase.from('payment_methods').select('id').eq('name_en', nameEn).limit(1)
+  if (excludeId) queryEn = queryEn.neq('id', excludeId)
+  const { data: dataEn, error: errorEn } = await queryEn
+  let queryAr = supabase.from('payment_methods').select('id').eq('name_ar', nameAr).limit(1)
+  if (excludeId) queryAr = queryAr.neq('id', excludeId)
+  const { data: dataAr, error: errorAr } = await queryAr
+  if (errorEn || errorAr) {
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
+}
+
 async function createPaymentMethod(methodData: PaymentMethodForm) {
+  const nameExists = await checkNameExists(methodData.name_en, methodData.name_ar)
+  if (nameExists) {
+    throw new Error('A payment method with this name already exists. Please use a different name.')
+  }
   const supabase = createClient()
   const { data, error } = await supabase
     .from('payment_methods')
     .insert(methodData)
     .select()
     .single()
-
   if (error) throw error
   return data
 }
 
 async function updatePaymentMethod(id: string, methodData: Partial<PaymentMethodForm>) {
   const supabase = createClient()
+  if (methodData.name_en || methodData.name_ar) {
+    const { data: currentMethod } = await supabase
+      .from('payment_methods')
+      .select('name_en, name_ar')
+      .eq('id', id)
+      .single()
+    const nameEn = methodData.name_en ?? currentMethod?.name_en ?? ''
+    const nameAr = methodData.name_ar ?? currentMethod?.name_ar ?? ''
+    const nameExists = await checkNameExists(nameEn, nameAr, id)
+    if (nameExists) {
+      throw new Error('A payment method with this name already exists. Please use a different name.')
+    }
+  }
   const { data, error } = await supabase
     .from('payment_methods')
     .update(methodData)
     .eq('id', id)
     .select()
     .single()
-
   if (error) throw error
   return data
 }
@@ -121,6 +153,7 @@ async function deletePaymentMethod(id: string) {
 
 export default function PaymentMethodsPage() {
   const t = useTranslations()
+  const { language } = useLanguageStore()
   const { profile } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -128,6 +161,9 @@ export default function PaymentMethodsPage() {
   const [editingMethod, setEditingMethod] = useState<PaymentMethod | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [methodToDelete, setMethodToDelete] = useState<PaymentMethod | null>(null)
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [selectedIdsForBulkDelete, setSelectedIdsForBulkDelete] = useState<string[]>([])
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
 
   // Check permissions
   const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('payment_methods')
@@ -292,6 +328,92 @@ export default function PaymentMethodsPage() {
     }
   }
 
+  const handleBulkDelete = async () => {
+    if (selectedIdsForBulkDelete.length === 0) return
+    
+    setIsBulkDeleting(true)
+    const deletedIds: string[] = []
+    const failedIds: string[] = []
+    const cannotDeleteIds: string[] = []
+    
+    try {
+      for (const id of selectedIdsForBulkDelete) {
+        try {
+          const hasProperties = await checkPaymentMethodHasProperties(id)
+          if (hasProperties) {
+            cannotDeleteIds.push(id)
+            continue
+          }
+          await deletePaymentMethod(id)
+          deletedIds.push(id)
+        } catch (error: any) {
+          failedIds.push(id)
+        }
+      }
+      
+      queryClient.invalidateQueries({ queryKey: ['payment-methods'] })
+      
+      const total = selectedIdsForBulkDelete.length
+      const successCount = deletedIds.length
+      const failedCount = failedIds.length
+      const cannotDeleteCount = cannotDeleteIds.length
+      
+      if (successCount > 0) {
+        toast({
+          title: t('common.success') === 'common.success'
+            ? (language === 'ar' ? 'نجاح' : 'Success')
+            : t('common.success'),
+          description: successCount === total
+            ? (t('paymentMethods.bulkDeletedSuccess') === 'paymentMethods.bulkDeletedSuccess'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} ${successCount === 1 ? 'طريقة دفع بنجاح' : 'طرق دفع بنجاح'}`
+                : `${successCount} ${successCount === 1 ? 'payment method has' : 'payment methods have'} been deleted successfully.`
+              : t('paymentMethods.bulkDeletedSuccess'))
+            : (t('paymentMethods.bulkDeletedPartial') === 'paymentMethods.bulkDeletedPartial'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} من ${total} طريقة دفع بنجاح`
+                : `${successCount} of ${total} payment methods deleted successfully.`
+              : t('paymentMethods.bulkDeletedPartial')),
+          variant: 'success',
+        })
+      }
+      
+      if (cannotDeleteCount > 0) {
+        toast({
+          title: t('common.warning') === 'common.warning'
+            ? (language === 'ar' ? 'تحذير' : 'Warning')
+            : t('common.warning'),
+          description: t('paymentMethods.cannotDeleteSome') === 'paymentMethods.cannotDeleteSome'
+            ? language === 'ar'
+              ? `لا يمكن حذف ${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'طريقة دفع لأنها' : 'طرق دفع لأنها'} مستخدمة في عقارات`
+              : `${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'payment method cannot' : 'payment methods cannot'} be deleted because ${cannotDeleteCount === 1 ? 'it is' : 'they are'} used in properties.`
+            : t('paymentMethods.cannotDeleteSome'),
+          variant: 'destructive',
+          duration: 6000,
+        })
+      }
+      
+      if (failedCount > 0) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('paymentMethods.bulkDeleteFailed') || `Failed to delete ${failedCount} ${failedCount === 1 ? 'payment method' : 'payment methods'}. Please try again. / فشل حذف ${failedCount} ${failedCount === 1 ? 'طريقة دفع' : 'طرق دفع'}. يرجى المحاولة مرة أخرى`,
+          variant: 'destructive',
+        })
+      }
+      
+      setBulkDeleteDialogOpen(false)
+      setSelectedIdsForBulkDelete([])
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('paymentMethods.bulkDeleteError') || 'An error occurred during bulk delete. Please try again. / حدث خطأ أثناء الحذف الجماعي. يرجى المحاولة مرة أخرى',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
+
   if (isLoading || isCheckingPermissions) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
   }
@@ -367,8 +489,20 @@ export default function PaymentMethodsPage() {
             data={methods}
             columns={columns}
             isLoading={isLoading}
-            searchKey="name_ar"
+            searchKey={['name_ar', 'name_en', 'status']}
             searchPlaceholder={t('common.search')}
+            enableSelection={canDelete}
+            bulkActions={canDelete ? [
+              {
+                label: t('common.delete') || 'Delete Selected',
+                action: (selectedIds: string[]) => {
+                  setSelectedIdsForBulkDelete(selectedIds)
+                  setBulkDeleteDialogOpen(true)
+                },
+                variant: 'destructive',
+                icon: <Trash className="h-4 w-4" />,
+              },
+            ] : []}
             actions={(method) => (
               <div className="flex gap-2">
                 {canEdit && (
@@ -492,6 +626,42 @@ export default function PaymentMethodsPage() {
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('common.confirmBulkDelete') === 'common.confirmBulkDelete'
+                ? (language === 'ar' ? 'تأكيد الحذف الجماعي' : 'Confirm Bulk Delete')
+                : t('common.confirmBulkDelete')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('paymentMethods.bulkDeleteConfirm') === 'paymentMethods.bulkDeleteConfirm'
+                ? language === 'ar'
+                  ? `هل أنت متأكد من حذف ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'طريقة دفع' : 'طرق دفع'}؟ لا يمكن التراجع عن هذا الإجراء`
+                  : `Are you sure you want to delete ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'payment method' : 'payment methods'}? This action cannot be undone.`
+                : t('paymentMethods.bulkDeleteConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              onClick={() => {
+                setSelectedIdsForBulkDelete([])
+              }}
+              disabled={isBulkDeleting}
+            >
+              {t('common.cancel') || 'Cancel / إلغاء'}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? (t('common.deleting') || 'Deleting... / جاري الحذف...') : (t('common.delete') || 'Delete / حذف')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

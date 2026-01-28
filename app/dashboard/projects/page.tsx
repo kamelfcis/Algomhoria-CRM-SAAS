@@ -51,7 +51,7 @@ const projectSchema = z.object({
   description_ar: z.string().optional().nullable(),
   description_en: z.string().optional().nullable(),
   image_url: z.string().optional().nullable(),
-  category_id: z.string().uuid().optional().nullable(),
+  category_id: z.string().uuid('Category is required'),
   order_index: z.number().int().min(0),
   status: z.enum(['active', 'inactive']),
 })
@@ -95,7 +95,53 @@ async function getProjectCategories() {
   return data
 }
 
+async function checkTitleExists(titleEn: string, titleAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  
+  // Check if title_en already exists
+  let queryEn = supabase
+    .from('projects')
+    .select('id')
+    .eq('title_en', titleEn)
+    .limit(1)
+  
+  if (excludeId) {
+    queryEn = queryEn.neq('id', excludeId)
+  }
+  
+  const { data: dataEn, error: errorEn } = await queryEn
+  
+  // Check if title_ar already exists
+  let queryAr = supabase
+    .from('projects')
+    .select('id')
+    .eq('title_ar', titleAr)
+    .limit(1)
+  
+  if (excludeId) {
+    queryAr = queryAr.neq('id', excludeId)
+  }
+  
+  const { data: dataAr, error: errorAr } = await queryAr
+  
+  if (errorEn || errorAr) {
+    // If there's an error, still check the results
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  
+  // Return true if either title exists
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
+}
+
 async function createProject(projectData: ProjectForm) {
+  // Check for duplicate titles
+  const titleExists = await checkTitleExists(projectData.title_en, projectData.title_ar)
+  if (titleExists) {
+    throw new Error('A project with this title already exists. Please use a different title.')
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('projects')
@@ -104,7 +150,6 @@ async function createProject(projectData: ProjectForm) {
       description_ar: projectData.description_ar || null,
       description_en: projectData.description_en || null,
       image_url: projectData.image_url || null,
-      category_id: projectData.category_id || null,
     })
     .select()
     .single()
@@ -115,6 +160,25 @@ async function createProject(projectData: ProjectForm) {
 
 async function updateProject(id: string, projectData: Partial<ProjectForm>) {
   const supabase = createClient()
+  
+  // Check for duplicate titles if title fields are being updated
+  if (projectData.title_en || projectData.title_ar) {
+    // Get current project to check both titles
+    const { data: currentProject } = await supabase
+      .from('projects')
+      .select('title_en, title_ar')
+      .eq('id', id)
+      .single()
+    
+    const titleEn = projectData.title_en ?? currentProject?.title_en ?? ''
+    const titleAr = projectData.title_ar ?? currentProject?.title_ar ?? ''
+    
+    const titleExists = await checkTitleExists(titleEn, titleAr, id)
+    if (titleExists) {
+      throw new Error('A project with this title already exists. Please use a different title.')
+    }
+  }
+
   const { data, error } = await supabase
     .from('projects')
     .update({
@@ -122,7 +186,6 @@ async function updateProject(id: string, projectData: Partial<ProjectForm>) {
       description_ar: projectData.description_ar || null,
       description_en: projectData.description_en || null,
       image_url: projectData.image_url || null,
-      category_id: projectData.category_id || null,
     })
     .eq('id', id)
     .select()
@@ -496,7 +559,7 @@ export default function ProjectsPage() {
             data={projects}
             columns={columns}
             isLoading={isLoading}
-            searchKey="title_ar"
+            searchKey={['title_ar', 'title_en', 'description_ar', 'description_en', 'status', 'project_categories.title_ar', 'project_categories.title_en']}
             searchPlaceholder={t('common.search')}
             actions={(project) => (
               <div className="flex gap-2">
@@ -593,17 +656,16 @@ export default function ProjectsPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label htmlFor="category_id">{t('projects.category') || 'Category'}</Label>
+                <Label htmlFor="category_id">{t('projects.category') || 'Category'} *</Label>
                 <Select
-                  onValueChange={(value) => setValue('category_id', value === 'none' ? undefined : value)}
-                  value={selectedCategoryId || 'none'}
+                  onValueChange={(value) => setValue('category_id', value, { shouldValidate: true })}
+                  value={selectedCategoryId || ''}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">{t('projects.noCategory') || 'No Category'}</SelectItem>
                     {categories?.map((category: any) => (
                       <SelectItem key={category.id} value={category.id}>
                         {category.title_ar} ({category.title_en})
@@ -611,6 +673,9 @@ export default function ProjectsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                {errors.category_id && (
+                  <p className="text-sm text-destructive">{errors.category_id.message}</p>
+                )}
               </div>
 
               <div className="space-y-2">

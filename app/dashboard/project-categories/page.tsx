@@ -77,7 +77,53 @@ async function getProjectCategories() {
   return data as ProjectCategory[]
 }
 
+async function checkTitleExists(titleEn: string, titleAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  
+  // Check if title_en already exists
+  let queryEn = supabase
+    .from('project_categories')
+    .select('id')
+    .eq('title_en', titleEn)
+    .limit(1)
+  
+  if (excludeId) {
+    queryEn = queryEn.neq('id', excludeId)
+  }
+  
+  const { data: dataEn, error: errorEn } = await queryEn
+  
+  // Check if title_ar already exists
+  let queryAr = supabase
+    .from('project_categories')
+    .select('id')
+    .eq('title_ar', titleAr)
+    .limit(1)
+  
+  if (excludeId) {
+    queryAr = queryAr.neq('id', excludeId)
+  }
+  
+  const { data: dataAr, error: errorAr } = await queryAr
+  
+  if (errorEn || errorAr) {
+    // If there's an error, still check the results
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  
+  // Return true if either title exists
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
+}
+
 async function createProjectCategory(categoryData: ProjectCategoryForm) {
+  // Check for duplicate titles
+  const titleExists = await checkTitleExists(categoryData.title_en, categoryData.title_ar)
+  if (titleExists) {
+    throw new Error('A project category with this title already exists. Please use a different title.')
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('project_categories')
@@ -94,6 +140,25 @@ async function createProjectCategory(categoryData: ProjectCategoryForm) {
 
 async function updateProjectCategory(id: string, categoryData: Partial<ProjectCategoryForm>) {
   const supabase = createClient()
+  
+  // Check for duplicate titles if title fields are being updated
+  if (categoryData.title_en || categoryData.title_ar) {
+    // Get current category to check both titles
+    const { data: currentCategory } = await supabase
+      .from('project_categories')
+      .select('title_en, title_ar')
+      .eq('id', id)
+      .single()
+    
+    const titleEn = categoryData.title_en ?? currentCategory?.title_en ?? ''
+    const titleAr = categoryData.title_ar ?? currentCategory?.title_ar ?? ''
+    
+    const titleExists = await checkTitleExists(titleEn, titleAr, id)
+    if (titleExists) {
+      throw new Error('A project category with this title already exists. Please use a different title.')
+    }
+  }
+
   const { data, error } = await supabase
     .from('project_categories')
     .update({
@@ -477,7 +542,7 @@ export default function ProjectCategoriesPage() {
             data={categories}
             columns={columns}
             isLoading={isLoading}
-            searchKey="title_ar"
+            searchKey={['title_ar', 'title_en', 'status']}
             searchPlaceholder={t('common.search')}
             actions={(category) => (
               <div className="flex gap-2">

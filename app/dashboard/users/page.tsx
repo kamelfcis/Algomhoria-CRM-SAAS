@@ -333,18 +333,18 @@ export default function UsersPage() {
     gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
   })
 
-  // Only fetch roles when editing (not needed for create)
+  // Fetch roles for both create and edit modes
   const { data: roles, error: rolesError } = useQuery({
     queryKey: ['roles'],
     queryFn: getRoles,
     retry: 2,
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes - roles don't change frequently
     gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
-    enabled: !!editingUser, // Only fetch when editing
+    enabled: isDialogOpen, // Fetch when dialog is open (for both create and edit)
   })
 
-  // Show error if roles can't be loaded (only when editing)
-  if (rolesError && editingUser) {
+  // Show error if roles can't be loaded
+  if (rolesError) {
     console.error('Error loading roles:', rolesError)
   }
 
@@ -989,54 +989,6 @@ export default function UsersPage() {
               )}
             </div>
 
-            {/* Roles section removed for create - can be assigned later from users page */}
-            {editingUser && (
-              <div className="space-y-2">
-                <Label>
-                  {t('users.role')} <span className="text-destructive">*</span>
-                </Label>
-                <div className="space-y-2 border rounded-md p-4 max-h-48 overflow-y-auto">
-                  {rolesError && (
-                    <p className="text-sm text-destructive mb-2">
-                      Error loading roles: {rolesError.message}. Please refresh the page.
-                    </p>
-                  )}
-                  {!rolesError && (!roles || roles.length === 0) && (
-                    <p className="text-sm text-muted-foreground mb-2">
-                      No roles available. Please create roles first.
-                    </p>
-                  )}
-                  {roles?.filter(r => r.status === 'active').map((role) => (
-                    <div key={role.id} className="flex items-center space-x-2">
-                      <Checkbox
-                        id={`role-${role.id}`}
-                        checked={selectedRoleIds.includes(role.id)}
-                        onCheckedChange={(checked) => {
-                          const currentIds = selectedRoleIds || []
-                          if (checked) {
-                            setValue('role_ids', [...currentIds, role.id], { shouldValidate: true })
-                          } else {
-                            setValue('role_ids', currentIds.filter(id => id !== role.id), { shouldValidate: true })
-                          }
-                        }}
-                      />
-                      <Label htmlFor={`role-${role.id}`} className="flex-1 cursor-pointer">
-                        <div>
-                          <span className="font-medium">{role.name}</span>
-                          {role.name_ar && (
-                            <span className="text-sm text-muted-foreground ml-2">({role.name_ar})</span>
-                          )}
-                        </div>
-                      </Label>
-                    </div>
-                  ))}
-                </div>
-                {errors.role_ids && (
-                  <p className="text-sm text-destructive mt-1" role="alert">{errors.role_ids.message}</p>
-                )}
-              </div>
-            )}
-
             {!editingUser && (
               <div className="space-y-2">
                 <Label htmlFor="password">
@@ -1065,6 +1017,52 @@ export default function UsersPage() {
                 )}
               </div>
             )}
+
+            {/* Roles section - available for both create and edit */}
+            <div className="space-y-2">
+              <Label>
+                {t('users.role')} {editingUser && <span className="text-destructive">*</span>}
+              </Label>
+              <div className="space-y-2 border rounded-md p-4 max-h-48 overflow-y-auto">
+                {rolesError && (
+                  <p className="text-sm text-destructive mb-2">
+                    Error loading roles: {rolesError.message}. Please refresh the page.
+                  </p>
+                )}
+                {!rolesError && (!roles || roles.length === 0) && (
+                  <p className="text-sm text-muted-foreground mb-2">
+                    No roles available. Please create roles first.
+                  </p>
+                )}
+                {roles?.filter(r => r.status === 'active').map((role) => (
+                  <div key={role.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`role-${role.id}`}
+                      checked={selectedRoleIds.includes(role.id)}
+                      onCheckedChange={(checked) => {
+                        const currentIds = selectedRoleIds || []
+                        if (checked) {
+                          setValue('role_ids', [...currentIds, role.id], { shouldValidate: true })
+                        } else {
+                          setValue('role_ids', currentIds.filter(id => id !== role.id), { shouldValidate: true })
+                        }
+                      }}
+                    />
+                    <Label htmlFor={`role-${role.id}`} className="flex-1 cursor-pointer">
+                      <div>
+                        <span className="font-medium">{role.name}</span>
+                        {role.name_ar && (
+                          <span className="text-sm text-muted-foreground ml-2">({role.name_ar})</span>
+                        )}
+                      </div>
+                    </Label>
+                  </div>
+                ))}
+              </div>
+              {errors.role_ids && (
+                <p className="text-sm text-destructive mt-1" role="alert">{errors.role_ids.message}</p>
+              )}
+            </div>
 
             <DialogFooter>
               <Button

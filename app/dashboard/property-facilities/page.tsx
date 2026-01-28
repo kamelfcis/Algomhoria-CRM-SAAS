@@ -7,19 +7,12 @@ import { useTranslations } from '@/hooks/use-translations'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataTable } from '@/components/tables/data-table'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Trash } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
+import { useLanguageStore } from '@/store/language-store'
 import { usePermissions } from '@/hooks/use-permissions'
 import { ActivityLogger } from '@/lib/utils/activity-logger'
 import { useToast } from '@/hooks/use-toast'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,6 +23,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useForm } from 'react-hook-form'
@@ -72,7 +73,51 @@ async function getFacilities() {
   return data as PropertyFacility[]
 }
 
+async function checkNameExists(nameEn: string, nameAr: string, excludeId?: string): Promise<boolean> {
+  const supabase = createClient()
+  
+  // Check if name_en already exists
+  let queryEn = supabase
+    .from('property_facilities')
+    .select('id')
+    .eq('name_en', nameEn)
+    .limit(1)
+  
+  if (excludeId) {
+    queryEn = queryEn.neq('id', excludeId)
+  }
+  
+  const { data: dataEn, error: errorEn } = await queryEn
+  
+  // Check if name_ar already exists
+  let queryAr = supabase
+    .from('property_facilities')
+    .select('id')
+    .eq('name_ar', nameAr)
+    .limit(1)
+  
+  if (excludeId) {
+    queryAr = queryAr.neq('id', excludeId)
+  }
+  
+  const { data: dataAr, error: errorAr } = await queryAr
+  
+  if (errorEn || errorAr) {
+    const foundEn = Boolean(dataEn && dataEn.length > 0)
+    const foundAr = Boolean(dataAr && dataAr.length > 0)
+    return foundEn || foundAr
+  }
+  
+  return Boolean((dataEn && dataEn.length > 0) || (dataAr && dataAr.length > 0))
+}
+
 async function createFacility(facilityData: FacilityForm) {
+  // Check for duplicate names
+  const nameExists = await checkNameExists(facilityData.name_en, facilityData.name_ar)
+  if (nameExists) {
+    throw new Error('A property facility with this name already exists. Please use a different name.')
+  }
+
   const supabase = createClient()
   const { data, error } = await supabase
     .from('property_facilities')
@@ -86,6 +131,24 @@ async function createFacility(facilityData: FacilityForm) {
 
 async function updateFacility(id: string, facilityData: Partial<FacilityForm>) {
   const supabase = createClient()
+  
+  // Check for duplicate names if name fields are being updated
+  if (facilityData.name_en || facilityData.name_ar) {
+    const { data: currentFacility } = await supabase
+      .from('property_facilities')
+      .select('name_en, name_ar')
+      .eq('id', id)
+      .single()
+    
+    const nameEn = facilityData.name_en ?? currentFacility?.name_en ?? ''
+    const nameAr = facilityData.name_ar ?? currentFacility?.name_ar ?? ''
+    
+    const nameExists = await checkNameExists(nameEn, nameAr, id)
+    if (nameExists) {
+      throw new Error('A property facility with this name already exists. Please use a different name.')
+    }
+  }
+
   const { data, error } = await supabase
     .from('property_facilities')
     .update(facilityData)
@@ -121,6 +184,7 @@ async function deleteFacility(id: string) {
 
 export default function PropertyFacilitiesPage() {
   const t = useTranslations()
+  const { language } = useLanguageStore()
   const { profile } = useAuthStore()
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -128,6 +192,9 @@ export default function PropertyFacilitiesPage() {
   const [editingFacility, setEditingFacility] = useState<PropertyFacility | null>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [facilityToDelete, setFacilityToDelete] = useState<PropertyFacility | null>(null)
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [selectedIdsForBulkDelete, setSelectedIdsForBulkDelete] = useState<string[]>([])
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
 
   // Check permissions
   const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('property_facilities')
@@ -320,6 +387,98 @@ export default function PropertyFacilitiesPage() {
     }
   }
 
+  const handleBulkDelete = async () => {
+    if (selectedIdsForBulkDelete.length === 0) return
+    
+    setIsBulkDeleting(true)
+    const deletedIds: string[] = []
+    const failedIds: string[] = []
+    const cannotDeleteIds: string[] = []
+    
+    try {
+      for (const id of selectedIdsForBulkDelete) {
+        try {
+          // Check if facility has references
+          const hasProperties = await checkFacilityHasProperties(id)
+          
+          if (hasProperties) {
+            cannotDeleteIds.push(id)
+            continue
+          }
+          
+          // Delete the facility
+          await deleteFacility(id)
+          deletedIds.push(id)
+        } catch (error: any) {
+          failedIds.push(id)
+        }
+      }
+      
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: ['property-facilities'] })
+      
+      // Show results
+      const total = selectedIdsForBulkDelete.length
+      const successCount = deletedIds.length
+      const failedCount = failedIds.length
+      const cannotDeleteCount = cannotDeleteIds.length
+      
+      if (successCount > 0) {
+        toast({
+          title: t('common.success') === 'common.success'
+            ? (language === 'ar' ? 'نجاح' : 'Success')
+            : t('common.success'),
+          description: successCount === total
+            ? (t('propertyFacilities.bulkDeletedSuccess') === 'propertyFacilities.bulkDeletedSuccess'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} ${successCount === 1 ? 'مرفق عقاري بنجاح' : 'مرافق عقارية بنجاح'}`
+                : `${successCount} ${successCount === 1 ? 'property facility has' : 'property facilities have'} been deleted successfully.`
+              : t('propertyFacilities.bulkDeletedSuccess'))
+            : (t('propertyFacilities.bulkDeletedPartial') === 'propertyFacilities.bulkDeletedPartial'
+              ? language === 'ar'
+                ? `تم حذف ${successCount} من ${total} مرفق عقاري بنجاح`
+                : `${successCount} of ${total} property facilities deleted successfully.`
+              : t('propertyFacilities.bulkDeletedPartial')),
+          variant: 'success',
+        })
+      }
+      
+      if (cannotDeleteCount > 0) {
+        toast({
+          title: t('common.warning') === 'common.warning'
+            ? (language === 'ar' ? 'تحذير' : 'Warning')
+            : t('common.warning'),
+          description: t('propertyFacilities.cannotDeleteSome') === 'propertyFacilities.cannotDeleteSome'
+            ? language === 'ar'
+              ? `لا يمكن حذف ${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'مرفق عقاري لأنه' : 'مرافق عقارية لأنها'} مستخدم ${cannotDeleteCount === 1 ? 'في' : 'في'} عقارات`
+              : `${cannotDeleteCount} ${cannotDeleteCount === 1 ? 'property facility cannot' : 'property facilities cannot'} be deleted because ${cannotDeleteCount === 1 ? 'it is' : 'they are'} used in properties.`
+            : t('propertyFacilities.cannotDeleteSome'),
+          variant: 'destructive',
+          duration: 6000,
+        })
+      }
+      
+      if (failedCount > 0) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: t('propertyFacilities.bulkDeleteFailed') || `Failed to delete ${failedCount} ${failedCount === 1 ? 'property facility' : 'property facilities'}. Please try again. / فشل حذف ${failedCount} ${failedCount === 1 ? 'مرفق عقاري' : 'مرافق عقارية'}. يرجى المحاولة مرة أخرى`,
+          variant: 'destructive',
+        })
+      }
+      
+      setBulkDeleteDialogOpen(false)
+      setSelectedIdsForBulkDelete([])
+    } catch (error: any) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('propertyFacilities.bulkDeleteError') || 'An error occurred during bulk delete. Please try again. / حدث خطأ أثناء الحذف الجماعي. يرجى المحاولة مرة أخرى',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsBulkDeleting(false)
+    }
+  }
+
   if (isLoading || isCheckingPermissions) {
     return <PageSkeleton showHeader showActions={canCreate} showTable tableRows={8} />
   }
@@ -395,8 +554,20 @@ export default function PropertyFacilitiesPage() {
             data={facilities}
             columns={columns}
             isLoading={isLoading}
-            searchKey="name_ar"
+            searchKey={['name_ar', 'name_en', 'status']}
             searchPlaceholder={t('common.search')}
+            enableSelection={canDelete}
+            bulkActions={canDelete ? [
+              {
+                label: t('common.delete') || 'Delete Selected',
+                action: (selectedIds: string[]) => {
+                  setSelectedIdsForBulkDelete(selectedIds)
+                  setBulkDeleteDialogOpen(true)
+                },
+                variant: 'destructive',
+                icon: <Trash className="h-4 w-4" />,
+              },
+            ] : []}
             actions={(facility) => (
               <div className="flex gap-2">
                 {canEdit && (
@@ -526,6 +697,42 @@ export default function PropertyFacilitiesPage() {
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('common.confirmBulkDelete') === 'common.confirmBulkDelete'
+                ? (language === 'ar' ? 'تأكيد الحذف الجماعي' : 'Confirm Bulk Delete')
+                : t('common.confirmBulkDelete')}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('propertyFacilities.bulkDeleteConfirm') === 'propertyFacilities.bulkDeleteConfirm'
+                ? language === 'ar'
+                  ? `هل أنت متأكد من حذف ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'مرفق عقاري' : 'مرافق عقارية'}؟ لا يمكن التراجع عن هذا الإجراء`
+                  : `Are you sure you want to delete ${selectedIdsForBulkDelete.length} ${selectedIdsForBulkDelete.length === 1 ? 'property facility' : 'property facilities'}? This action cannot be undone.`
+                : t('propertyFacilities.bulkDeleteConfirm')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              onClick={() => {
+                setSelectedIdsForBulkDelete([])
+              }}
+              disabled={isBulkDeleting}
+            >
+              {t('common.cancel') || 'Cancel'}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? (t('common.deleting') || 'Deleting... / جاري الحذف...') : (t('common.delete') || 'Delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

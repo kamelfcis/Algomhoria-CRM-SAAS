@@ -584,8 +584,8 @@ export default function TeamUsersPage() {
               <ImageUpload
                 value={watch('image_url') || undefined}
                 onChange={(url) => setValue('image_url', url || null)}
-                bucket="team-users"
-                folder="profiles"
+                bucket="site-assets"
+                folder="team-users"
                 maxSize={5}
                 disabled={createMutation.isPending || updateMutation.isPending}
               />
