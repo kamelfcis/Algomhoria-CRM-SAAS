@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useMemo } from 'react'
+import React from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,36 +38,6 @@ const RANGE_COLORS = [
   { bg: 'bg-teal-100', border: 'border-teal-400', text: 'text-teal-800', darkBg: 'dark:bg-teal-900/30', darkBorder: 'dark:border-teal-500', darkText: 'dark:text-teal-200' },
 ]
 
-// Helper function to get all dates in a range
-const getDatesInRange = (startDate: string, endDate: string): Date[] => {
-  if (!startDate || !endDate) return []
-  const start = new Date(startDate)
-  const end = new Date(endDate)
-  const dates: Date[] = []
-  
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    dates.push(new Date(d))
-  }
-  
-  return dates
-}
-
-// Helper function to format date as YYYY-MM-DD
-const formatDate = (date: Date): string => {
-  return date.toISOString().split('T')[0]
-}
-
-// Helper function to check if a date is in any range
-const isDateInRanges = (date: Date, ranges: DailyRentPricingItem[]): { index: number; color: typeof RANGE_COLORS[0] } | null => {
-  const dateStr = formatDate(date)
-  for (let i = 0; i < ranges.length; i++) {
-    const range = ranges[i]
-    if (range.from_date && range.to_date && dateStr >= range.from_date && dateStr <= range.to_date) {
-      return { index: i, color: RANGE_COLORS[i % RANGE_COLORS.length] }
-    }
-  }
-  return null
-}
 
 export function DailyRentPricing({ value = [], onChange, disabled = false, currencySymbol = '$' }: DailyRentPricingProps) {
   const addRow = () => {
@@ -97,33 +67,6 @@ export function DailyRentPricing({ value = [], onChange, disabled = false, curre
     }
     onChange(updated)
   }
-
-  // Generate calendar view for current month
-  const calendarDays = useMemo(() => {
-    const today = new Date()
-    const year = today.getFullYear()
-    const month = today.getMonth()
-    const firstDay = new Date(year, month, 1)
-    const lastDay = new Date(year, month + 1, 0)
-    const daysInMonth = lastDay.getDate()
-    const startingDayOfWeek = firstDay.getDay()
-    
-    const days: Array<{ date: Date | null; inRange: { index: number; color: typeof RANGE_COLORS[0] } | null }> = []
-    
-    // Add empty cells for days before the first day of the month
-    for (let i = 0; i < startingDayOfWeek; i++) {
-      days.push({ date: null, inRange: null })
-    }
-    
-    // Add all days of the month
-    for (let day = 1; day <= daysInMonth; day++) {
-      const date = new Date(year, month, day)
-      const inRange = isDateInRanges(date, value)
-      days.push({ date, inRange })
-    }
-    
-    return days
-  }, [value])
 
   return (
     <div className="space-y-6">
@@ -155,63 +98,6 @@ export function DailyRentPricing({ value = [], onChange, disabled = false, curre
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Calendar Preview */}
-          {value.some(r => r.from_date && r.to_date) && (
-            <div className="bg-gradient-to-br from-background to-muted/30 p-4 rounded-lg border-2 border-primary/20">
-              <Label className="text-sm font-semibold mb-3 block flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
-                Calendar Preview - Current Month
-              </Label>
-              <div className="grid grid-cols-7 gap-1">
-                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                  <div key={day} className="text-center text-xs font-semibold text-muted-foreground p-2">
-                    {day}
-                  </div>
-                ))}
-                {calendarDays.map((day, idx) => {
-                  if (!day.date) {
-                    return <div key={idx} className="aspect-square" />
-                  }
-                  
-                  const dateStr = formatDate(day.date)
-                  const isToday = dateStr === formatDate(new Date())
-                  const rangeInfo = day.inRange
-                  
-                  return (
-                    <div
-                      key={idx}
-                      className={cn(
-                        "aspect-square rounded-md border-2 flex items-center justify-center text-xs font-medium transition-all hover:scale-110 cursor-default",
-                        rangeInfo
-                          ? `${rangeInfo.color.bg} ${rangeInfo.color.border} ${rangeInfo.color.text} ${rangeInfo.color.darkBg} ${rangeInfo.color.darkBorder} ${rangeInfo.color.darkText} border-2`
-                          : "bg-background border-border hover:bg-muted",
-                        isToday && "ring-2 ring-primary ring-offset-1"
-                      )}
-                      title={rangeInfo ? `Range ${rangeInfo.index + 1}` : dateStr}
-                    >
-                      {day.date.getDate()}
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                {value.map((row, idx) => {
-                  if (!row.from_date || !row.to_date) return null
-                  const color = RANGE_COLORS[idx % RANGE_COLORS.length]
-                  return (
-                    <div key={idx} className={cn(
-                      "flex items-center gap-2 px-3 py-1.5 rounded-md border-2 text-xs font-medium",
-                      `${color.bg} ${color.border} ${color.text} ${color.darkBg} ${color.darkBorder} ${color.darkText}`
-                    )}>
-                      <div className={cn("w-3 h-3 rounded-full", color.bg, color.border, "border")} />
-                      <span>Range {idx + 1}: {row.from_date} to {row.to_date}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Date Range Cards */}
           {value.map((row, index) => {
             const color = RANGE_COLORS[index % RANGE_COLORS.length]

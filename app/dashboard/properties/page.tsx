@@ -12,14 +12,6 @@ import { Plus, Pencil, Trash2, Image as ImageIcon, Grid3x3, List, ChevronLeft, C
 import { useAuthStore } from '@/store/auth-store'
 import { usePermissions } from '@/hooks/use-permissions'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -116,6 +108,8 @@ interface Property {
   title_en: string
   description_ar: string | null
   description_en: string | null
+  address_ar: string | null
+  address_en: string | null
   price: number | null
   sale_price: number | null
   rent_price: number | null
@@ -848,8 +842,9 @@ export default function PropertiesPage() {
   const { profile } = useAuthStore()
   const { currency, dollarRate, formatPrice: formatPriceValue } = useCurrency()
   const queryClient = useQueryClient()
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [editingProperty, setEditingProperty] = useState<Property | null>(null)
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
+  const expandedRowRef = React.useRef<HTMLDivElement>(null)
   const [selectedGovernorate, setSelectedGovernorate] = useState<string>('none')
   const [selectedArea, setSelectedArea] = useState<string>('none')
   const [selectedStreet, setSelectedStreet] = useState<string>('none')
@@ -865,6 +860,7 @@ export default function PropertiesPage() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
   const [cardViewPage, setCardViewPage] = useState(1)
   const [itemsPerPage, setItemsPerPage] = useState(12)
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   
   // Helper function to convert EGP to USD for storage
   const convertEGPToUSD = (egpValue: number | null | undefined): number | null => {
@@ -958,45 +954,48 @@ export default function PropertiesPage() {
     gcTime: 15 * 60 * 1000, // Keep in cache for 15 minutes
   })
 
-  // Fetch next code when dialog opens for new property
+  // Fetch next code when creating new property
   const { data: nextCodeData, refetch: refetchNextCode } = useQuery({
     queryKey: ['next-property-code'],
     queryFn: getNextPropertyCode,
-    enabled: isDialogOpen && !editingProperty,
+    enabled: isCreating,
     staleTime: 60000, // Cache for 1 minute - code generation can be cached briefly
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   })
 
   // Update nextCode state when data is fetched
   useEffect(() => {
-    if (nextCodeData && !editingProperty) {
+    if (nextCodeData && isCreating) {
       setNextCode(nextCodeData)
-    } else if (editingProperty) {
+    } else if (expandedRowId) {
       setNextCode('')
     }
-  }, [nextCodeData, editingProperty])
+  }, [nextCodeData, isCreating, expandedRowId])
 
-  // Refetch next code when dialog opens for new property
+  // Refetch next code when creating new property
   useEffect(() => {
-    if (isDialogOpen && !editingProperty) {
+    if (isCreating) {
       refetchNextCode()
     }
-  }, [isDialogOpen, editingProperty, refetchNextCode])
+  }, [isCreating, refetchNextCode])
 
   const createMutation = useMutation({
     mutationFn: createProperty,
     onSuccess: async (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
+      setIsCreating(false)
+      setExpandedRowId(null)
       // Log activity
       if (data?.id) {
         await ActivityLogger.create('property', data.id, data.title_en || data.title_ar || data.code || 'Untitled Property')
-        // Set editing property to enable image upload
-        setEditingProperty({ ...data, title_ar: data.title_ar || '', title_en: data.title_en || '' } as Property)
+        // Set expanded row to enable image upload
+        setExpandedRowId(data.id)
+        setIsCreating(false)
         // Load images (will be empty for new property)
         const images = await getPropertyImages(data.id)
         setPropertyImages(images)
       }
-      // Don't close dialog - allow user to upload images
+      // Keep form open to allow user to upload images
     },
   })
 
@@ -1007,7 +1006,7 @@ export default function PropertiesPage() {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
       queryClient.invalidateQueries({ queryKey: ['all-property-images'] })
       // Log activity
-      const previousProperty = editingProperty
+      const previousProperty = expandedRowId ? properties?.find(p => p.id === expandedRowId) : null
       if (previousProperty && data?.id) {
         await ActivityLogger.update(
           'property',
@@ -1017,10 +1016,11 @@ export default function PropertiesPage() {
           data
         )
       }
-      // Close dialog and reset form
-      setIsDialogOpen(false)
-      setEditingProperty(null)
+      // Close form and reset
+      setExpandedRowId(null)
+      setIsCreating(false)
       reset()
+      setFormErrors({})
       setPropertyImages([])
       setDailyRentPricing([])
       // Show success toast
@@ -1129,137 +1129,196 @@ export default function PropertiesPage() {
       facilityIds: selectedFacilities,
       serviceIds: selectedServices,
     }
-    if (editingProperty) {
-      updateMutation.mutate({ id: editingProperty.id, data: submitData })
+    if (expandedRowId && !isCreating) {
+      updateMutation.mutate({ id: expandedRowId, data: submitData })
     } else {
       createMutation.mutate(submitData)
     }
   }
 
-  const handleEdit = async (property: any) => {
-    // Fetch fresh data from database to ensure we have the latest updates
-    let propertyToEdit = property
-    try {
-      const supabase = createClient()
-      const { data: freshProperty, error } = await supabase
-        .from('properties')
-        .select('*')
-        .eq('id', property.id)
-        .single()
-
-      if (error) {
-        console.error('Error fetching fresh property data:', error)
-        // Fallback to cached property if fetch fails
-      } else {
-        // Use fresh data from database
-        propertyToEdit = freshProperty as Property
-      }
-    } catch (error) {
-      console.error('Error fetching property:', error)
-      // Fallback to cached property
-    }
-
-    setEditingProperty(propertyToEdit)
-    // Refresh all dropdown lists
-    refetchMasterData()
-    // Code is read-only, so we don't set it in the form
-    setValue('title_ar', propertyToEdit.title_ar)
-    
-    // Load existing facilities and services
-    try {
-      const [facilityIds, serviceIds] = await Promise.all([
-        getPropertyFacilities(propertyToEdit.id),
-        getPropertyServices(propertyToEdit.id),
-      ])
-      setSelectedFacilities(facilityIds)
-      setSelectedServices(serviceIds)
-    } catch (error) {
-      console.error('Error loading property facilities/services:', error)
+  const handleToggleExpand = React.useCallback(async (property: Property | null, scrollTo = false) => {
+    if (expandedRowId === property?.id) {
+      // Collapse
+      setExpandedRowId(null)
+      setIsCreating(false)
+      reset()
+      setFormErrors({})
+      setSelectedGovernorate('none')
+      setSelectedArea('none')
+      setSelectedStreet('none')
       setSelectedFacilities([])
       setSelectedServices([])
-    }
-    setValue('title_en', propertyToEdit.title_en)
-    setValue('description_ar', propertyToEdit.description_ar || '')
-    setValue('description_en', propertyToEdit.description_en || '')
-    setValue('address_ar', propertyToEdit.address_ar || '')
-    setValue('address_en', propertyToEdit.address_en || '')
-    setValue('location_text', propertyToEdit.location_text || '')
-    setValue('latitude', propertyToEdit.latitude || undefined)
-    setValue('longitude', propertyToEdit.longitude || undefined)
-    // Convert USD prices to EGP for display if currency is EGP
-    setValue('price', convertUSDToEGP(propertyToEdit.price) || undefined)
-    setValue('sale_price', convertUSDToEGP(propertyToEdit.sale_price) || undefined)
-    setValue('rent_price', convertUSDToEGP(propertyToEdit.rent_price) || undefined)
-    setValue('rental_period', propertyToEdit.rental_period || undefined)
-    
-    // Convert daily rent pricing from USD to EGP if currency is EGP
-    if (propertyToEdit.daily_rent_pricing && currency === 'EGP' && dollarRate > 0) {
-      try {
-        const pricing = Array.isArray(propertyToEdit.daily_rent_pricing)
-          ? propertyToEdit.daily_rent_pricing
-          : (typeof propertyToEdit.daily_rent_pricing === 'string' 
-              ? JSON.parse(propertyToEdit.daily_rent_pricing) 
-              : [])
-        
-        const convertedPricing = pricing.map((range: any) => ({
-          ...range,
-          monday: range.monday * dollarRate,
-          tuesday: range.tuesday * dollarRate,
-          wednesday: range.wednesday * dollarRate,
-          thursday: range.thursday * dollarRate,
-          friday: range.friday * dollarRate,
-          saturday: range.saturday * dollarRate,
-          sunday: range.sunday * dollarRate,
-        }))
-        setDailyRentPricing(convertedPricing)
-      } catch (e) {
-        console.error('Error loading daily_rent_pricing:', e)
-        setDailyRentPricing([])
-      }
+      setPropertyImages([])
+      setDailyRentPricing([])
     } else {
-      // Load daily rent pricing (no conversion needed)
-      if (propertyToEdit.daily_rent_pricing) {
+      // Expand - fetch fresh data if editing
+      let propertyToEdit = property
+      if (property) {
         try {
-          const pricing = propertyToEdit.daily_rent_pricing
-          setDailyRentPricing(Array.isArray(pricing) ? pricing : [])
+          const supabase = createClient()
+          const { data: freshProperty, error } = await supabase
+            .from('properties')
+            .select('*')
+            .eq('id', property.id)
+            .single()
+
+          if (error) {
+            console.error('Error fetching fresh property data:', error)
+          } else {
+            propertyToEdit = freshProperty as Property
+          }
+        } catch (error) {
+          console.error('Error fetching property:', error)
+        }
+        setExpandedRowId(property.id)
+        setIsCreating(false)
+      } else {
+        // Creating new property
+        setExpandedRowId(null)
+        setIsCreating(true)
+        refetchMasterData()
+        // Reset form for new property
+        reset()
+        setFormErrors({})
+        setSelectedGovernorate('none')
+        setSelectedArea('none')
+        setSelectedStreet('none')
+        setSelectedFacilities([])
+        setSelectedServices([])
+        setPropertyImages([])
+        setDailyRentPricing([])
+        setValue('status', 'pending')
+        setValue('is_featured', false)
+        setValue('is_rented', false)
+        setValue('is_sold', false)
+        return // Exit early for new property creation
+      }
+      
+      // Only execute the following code when editing (propertyToEdit exists)
+      if (!propertyToEdit) return
+      
+      // Refresh all dropdown lists
+      refetchMasterData()
+      // Code is read-only, so we don't set it in the form
+      setValue('title_ar', propertyToEdit.title_ar)
+      
+      // Load existing facilities and services
+      try {
+        const [facilityIds, serviceIds] = await Promise.all([
+          getPropertyFacilities(propertyToEdit.id),
+          getPropertyServices(propertyToEdit.id),
+        ])
+        setSelectedFacilities(facilityIds)
+        setSelectedServices(serviceIds)
+      } catch (error) {
+        console.error('Error loading property facilities/services:', error)
+        setSelectedFacilities([])
+        setSelectedServices([])
+      }
+      setValue('title_en', propertyToEdit.title_en)
+      setValue('description_ar', propertyToEdit.description_ar || '')
+      setValue('description_en', propertyToEdit.description_en || '')
+      setValue('address_ar', propertyToEdit.address_ar || '')
+      setValue('address_en', propertyToEdit.address_en || '')
+      setValue('location_text', propertyToEdit.location_text || '')
+      setValue('latitude', propertyToEdit.latitude || undefined)
+      setValue('longitude', propertyToEdit.longitude || undefined)
+      // Convert USD prices to EGP for display if currency is EGP
+      setValue('price', convertUSDToEGP(propertyToEdit.price) || undefined)
+      setValue('sale_price', convertUSDToEGP(propertyToEdit.sale_price) || undefined)
+      setValue('rent_price', convertUSDToEGP(propertyToEdit.rent_price) || undefined)
+      const rentalPeriod = propertyToEdit.rental_period
+      if (rentalPeriod === 'monthly' || rentalPeriod === 'weekly' || rentalPeriod === 'yearly') {
+        setValue('rental_period', rentalPeriod)
+      } else {
+        setValue('rental_period', undefined)
+      }
+      
+      // Convert daily rent pricing from USD to EGP if currency is EGP
+      if (propertyToEdit.daily_rent_pricing && currency === 'EGP' && dollarRate > 0) {
+        try {
+          const pricing = Array.isArray(propertyToEdit.daily_rent_pricing)
+            ? propertyToEdit.daily_rent_pricing
+            : (typeof propertyToEdit.daily_rent_pricing === 'string' 
+                ? JSON.parse(propertyToEdit.daily_rent_pricing) 
+                : [])
+          
+          const convertedPricing = pricing.map((range: any) => ({
+            ...range,
+            monday: range.monday * dollarRate,
+            tuesday: range.tuesday * dollarRate,
+            wednesday: range.wednesday * dollarRate,
+            thursday: range.thursday * dollarRate,
+            friday: range.friday * dollarRate,
+            saturday: range.saturday * dollarRate,
+            sunday: range.sunday * dollarRate,
+          }))
+          setDailyRentPricing(convertedPricing)
         } catch (e) {
           console.error('Error loading daily_rent_pricing:', e)
           setDailyRentPricing([])
         }
       } else {
-        setDailyRentPricing([])
+        // Load daily rent pricing (no conversion needed)
+        if (propertyToEdit.daily_rent_pricing) {
+          try {
+            const pricing = propertyToEdit.daily_rent_pricing
+            setDailyRentPricing(Array.isArray(pricing) ? pricing : [])
+          } catch (e) {
+            console.error('Error loading daily_rent_pricing:', e)
+            setDailyRentPricing([])
+          }
+        } else {
+          setDailyRentPricing([])
+        }
+      }
+      setValue('size', propertyToEdit.size || undefined)
+      setValue('baths', propertyToEdit.baths || undefined)
+      setValue('floor_no', propertyToEdit.floor_no || undefined)
+      setValue('no_of_receptions', propertyToEdit.no_of_receptions || undefined)
+      setValue('no_of_rooms', propertyToEdit.no_of_rooms || undefined)
+      setValue('building_no', propertyToEdit.building_no || '')
+      setValue('apartment_no', propertyToEdit.apartment_no || '')
+      setValue('youtube_url', propertyToEdit.youtube_url || '')
+      setValue('property_note', propertyToEdit.property_note || '')
+      setValue('phone_number', propertyToEdit.phone_number || '')
+      setValue('status', propertyToEdit.status as any)
+      setValue('is_featured', propertyToEdit.is_featured || false)
+      setValue('is_rented', propertyToEdit.is_rented || false)
+      setValue('is_sold', propertyToEdit.is_sold || false)
+      setValue('rental_end_date', propertyToEdit.rental_end_date ? new Date(propertyToEdit.rental_end_date).toISOString().split('T')[0] : undefined)
+      setValue('property_type_id', propertyToEdit.property_type_id || undefined)
+      setValue('owner_id', propertyToEdit.owner_id || undefined)
+      setValue('section_id', propertyToEdit.section_id || undefined)
+      setValue('payment_method_id', propertyToEdit.payment_method_id || undefined)
+      setValue('view_type_id', propertyToEdit.view_type_id || undefined)
+      setValue('finishing_type_id', propertyToEdit.finishing_type_id || undefined)
+      setValue('governorate_id', propertyToEdit.governorate_id || undefined)
+      
+      setSelectedGovernorate(propertyToEdit.governorate_id || 'none')
+      setSelectedArea(propertyToEdit.area_id || 'none')
+      setSelectedStreet(propertyToEdit.street_id || 'none')
+      // Load property images
+      const images = await getPropertyImages(propertyToEdit.id)
+      setPropertyImages(images)
+      
+      if (scrollTo) {
+        setTimeout(() => {
+          expandedRowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          // Also scroll window to top for better UX
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }, 100)
+      } else if (!property) {
+        // When creating new, always scroll to top
+        setTimeout(() => {
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }, 100)
       }
     }
-    setValue('size', propertyToEdit.size || undefined)
-    setValue('baths', propertyToEdit.baths || undefined)
-    setValue('floor_no', propertyToEdit.floor_no || undefined)
-    setValue('no_of_receptions', propertyToEdit.no_of_receptions || undefined)
-    setValue('no_of_rooms', propertyToEdit.no_of_rooms || undefined)
-    setValue('building_no', propertyToEdit.building_no || '')
-    setValue('apartment_no', propertyToEdit.apartment_no || '')
-    setValue('youtube_url', propertyToEdit.youtube_url || '')
-    setValue('property_note', propertyToEdit.property_note || '')
-    setValue('phone_number', propertyToEdit.phone_number || '')
-    setValue('status', propertyToEdit.status as any)
-    setValue('is_featured', propertyToEdit.is_featured || false)
-    setValue('is_rented', propertyToEdit.is_rented || false)
-    setValue('is_sold', propertyToEdit.is_sold || false)
-    setValue('rental_end_date', propertyToEdit.rental_end_date ? new Date(propertyToEdit.rental_end_date).toISOString().split('T')[0] : undefined)
-    setValue('property_type_id', propertyToEdit.property_type_id || undefined)
-    setValue('owner_id', propertyToEdit.owner_id || undefined)
-    setValue('section_id', propertyToEdit.section_id || undefined)
-    setValue('payment_method_id', propertyToEdit.payment_method_id || undefined)
-    setValue('view_type_id', propertyToEdit.view_type_id || undefined)
-    setValue('finishing_type_id', propertyToEdit.finishing_type_id || undefined)
-    setValue('governorate_id', propertyToEdit.governorate_id || undefined)
-    
-    setSelectedGovernorate(propertyToEdit.governorate_id || 'none')
-    setSelectedArea(propertyToEdit.area_id || 'none')
-    setSelectedStreet(propertyToEdit.street_id || 'none')
-    setIsDialogOpen(true)
-    // Load property images
-    const images = await getPropertyImages(property.id)
-    setPropertyImages(images)
+  }, [expandedRowId, reset, setValue, currency, dollarRate, refetchMasterData])
+  
+  const handleEdit = (property: Property) => {
+    handleToggleExpand(property, true)
   }
 
   const handleDelete = (property: Property) => {
@@ -1591,24 +1650,1092 @@ export default function PropertiesPage() {
           <p className="text-muted-foreground">Manage real estate properties</p>
         </div>
         {canCreate && (
-          <Button onClick={() => {
-            setEditingProperty(null)
-            reset()
-            setSelectedGovernorate('none')
-            setSelectedArea('none')
-            setSelectedStreet('none')
-            setSelectedFacilities([])
-            setSelectedServices([])
-            refetchMasterData() // Refresh all dropdown lists
-            setIsDialogOpen(true)
-          }}>
+          <Button 
+            onClick={() => {
+              handleToggleExpand(null)
+            }}
+            className="transition-all duration-300 hover:scale-105 hover:shadow-lg"
+          >
             <Plus className="mr-2 h-4 w-4" />
             {t('properties.createProperty')}
           </Button>
         )}
       </div>
 
-      {/* Advanced Filters */}
+      {/* Expandable Form Section - At the Top */}
+      {(expandedRowId || isCreating) && (
+        <div 
+          ref={expandedRowRef}
+          className="animate-in slide-in-from-top-4 fade-in-0 duration-300 ease-out"
+        >
+          <Card className="border border-border/50 shadow-lg mb-6 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <CardHeader className="border-b border-border/50 bg-muted/30 px-8 py-6   z-10 backdrop-blur-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="p-2.5 rounded-lg bg-primary/10 border border-primary/20">
+                    <Building2 className="h-5 w-5 text-primary" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-xl font-semibold text-foreground tracking-tight">
+                      {expandedRowId ? t('properties.editProperty') : t('properties.createProperty')}
+                    </CardTitle>
+                    <p className="text-sm mt-1 text-muted-foreground font-normal">
+                      {expandedRowId ? 'Update property information and settings' : 'Fill in the details to create a new property listing'}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => handleToggleExpand(null)}
+                  className="h-8 w-8 rounded-md transition-all duration-200 hover:bg-muted"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-8 overflow-x-hidden" style={{
+              scrollBehavior: 'smooth',
+            }}>
+              <form
+                onSubmit={handleSubmit(
+                  (data) => {
+                    setFormErrors({})
+                    onSubmit(data)
+                  },
+                  (errors) => {
+                    // Map errors to user-friendly field names
+                    const fieldLabels: Record<string, string> = {
+                      title_ar: 'Title (Arabic)',
+                      title_en: 'Title (English)',
+                      description_ar: 'Description (Arabic)',
+                      description_en: 'Description (English)',
+                      address_ar: 'Address (Arabic)',
+                      address_en: 'Address (English)',
+                      governorate_id: 'Governorate',
+                      area_id: 'Area',
+                      street_id: 'Street',
+                      property_type_id: 'Property Type',
+                      section_id: 'Section',
+                      price: 'Price',
+                      sale_price: 'Sale Price',
+                      rent_price: 'Rent Price',
+                      rental_period: 'Rental Period',
+                      owner_id: 'Property Owner',
+                      payment_method_id: 'Payment Method',
+                      view_type_id: 'View Type',
+                      finishing_type_id: 'Finishing Type',
+                      phone_number: 'Phone Number',
+                      status: 'Status',
+                      youtube_url: 'YouTube URL',
+                    }
+                    
+                    const errorMessages: Record<string, string> = {}
+                    Object.keys(errors).forEach((key) => {
+                      const error = errors[key as keyof typeof errors]
+                      if (error?.message) {
+                        errorMessages[key] = error.message
+                      } else {
+                        errorMessages[key] = `${fieldLabels[key] || key} is required`
+                      }
+                    })
+                    
+                    setFormErrors(errorMessages)
+                    
+                    // Scroll to first error field
+                    const firstErrorField = Object.keys(errors)[0]
+                    if (firstErrorField) {
+                      setTimeout(() => {
+                        const element = document.getElementById(firstErrorField)
+                        if (element) {
+                          element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          element.focus()
+                        }
+                      }, 100)
+                    }
+                    
+                    // Show toast with error summary
+                    const missingFields = Object.keys(errorMessages).map(key => fieldLabels[key] || key).join(', ')
+                    toast({
+                      title: t('common.error') || 'Validation Error',
+                      description: `Please fill in the following required fields: ${missingFields}`,
+                      variant: 'destructive',
+                      duration: 5000,
+                    })
+                  }
+                )} 
+                className="space-y-6"
+              >
+                {/* Validation Errors Alert */}
+                {Object.keys(formErrors).length > 0 && (
+                  <div className="bg-destructive/10 border-2 border-destructive rounded-lg p-4 mb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 mt-0.5">
+                        <X className="h-5 w-5 text-destructive" />
+                      </div>
+                      <div className="flex-1">
+                        <h4 className="text-sm font-semibold text-destructive mb-2">
+                          {t('common.validationError') || 'Please fix the following errors before saving:'}
+                        </h4>
+                        <ul className="list-disc list-inside space-y-1">
+                          {Object.entries(formErrors).map(([field, message]) => {
+                            const fieldLabels: Record<string, string> = {
+                              title_ar: 'Title (Arabic)',
+                              title_en: 'Title (English)',
+                              description_ar: 'Description (Arabic)',
+                              description_en: 'Description (English)',
+                              address_ar: 'Address (Arabic)',
+                              address_en: 'Address (English)',
+                              governorate_id: 'Governorate',
+                              area_id: 'Area',
+                              street_id: 'Street',
+                              property_type_id: 'Property Type',
+                              section_id: 'Section',
+                              price: 'Price',
+                              sale_price: 'Sale Price',
+                              rent_price: 'Rent Price',
+                              rental_period: 'Rental Period',
+                              owner_id: 'Property Owner',
+                              payment_method_id: 'Payment Method',
+                              view_type_id: 'View Type',
+                              finishing_type_id: 'Finishing Type',
+                              phone_number: 'Phone Number',
+                              status: 'Status',
+                              youtube_url: 'YouTube URL',
+                            }
+                            return (
+                              <li key={field} className="text-sm text-destructive">
+                                <strong>{fieldLabels[field] || field}:</strong> {message}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setFormErrors({})}
+                        className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/20"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {/* Basic Information */}
+                <Card className="border border-border/50 bg-card shadow-sm">
+                  <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                    <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                      <Building2 className="h-4 w-4 text-muted-foreground" />
+                      Basic Information
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pt-6 space-y-5">
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-2.5">
+                        <Label htmlFor="code" className="text-sm font-medium text-foreground">
+                          {t('properties.code')} <span className="text-xs font-normal text-muted-foreground">(Auto-generated)</span>
+                        </Label>
+                        <Input
+                          id="code"
+                          value={expandedRowId ? (properties?.find(p => p.id === expandedRowId)?.code || '-') : (nextCode || 'Calculating...')}
+                          disabled={true}
+                          className="bg-muted/50 border-border/50 text-foreground font-medium cursor-not-allowed"
+                          readOnly
+                        />
+                        <p className="text-xs text-muted-foreground font-normal">
+                          {expandedRowId 
+                            ? 'Code cannot be changed after creation' 
+                            : `Next code that will be assigned: ${nextCode || 'Calculating...'}`}
+                        </p>
+                      </div>
+
+                      <div className="space-y-2.5">
+                        <Label htmlFor="status" className="text-sm font-medium text-foreground">{t('properties.status')}</Label>
+                        <Select
+                          onValueChange={(value) => setValue('status', value as any)}
+                          value={selectedStatus || 'pending'}
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
+                            <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
+                            <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
+                            <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
+                            <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
+                            <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
+                            <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
+                            <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+            {/* Property Details */}
+            <Card className="border border-border/50 bg-card shadow-sm">
+              <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                  <Home className="h-4 w-4 text-muted-foreground" />
+                  Property Details
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-5">
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="title_ar" className="text-sm font-medium text-foreground">
+                      {t('properties.title_ar')} <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="title_ar"
+                      {...register('title_ar')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className={cn(
+                        "transition-all duration-200",
+                        errors.title_ar && "border-destructive focus-visible:ring-destructive"
+                      )}
+                    />
+                    {errors.title_ar && (
+                      <p className="text-sm text-destructive font-normal">{errors.title_ar.message}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="title_en" className="text-sm font-medium text-foreground">
+                      {t('properties.title_en')} <span className="text-destructive">*</span>
+                    </Label>
+                    <Input
+                      id="title_en"
+                      {...register('title_en')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className={cn(
+                        "transition-all duration-200",
+                        errors.title_en && "border-destructive focus-visible:ring-destructive"
+                      )}
+                    />
+                    {errors.title_en && (
+                      <p className="text-sm text-destructive font-normal">{errors.title_en.message}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="description_ar" className="text-sm font-medium text-foreground">{t('properties.description_ar') || 'Description (Arabic)'}</Label>
+                    <textarea
+                      id="description_ar"
+                      {...register('description_ar')}
+                      className={cn(
+                        "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200",
+                        errors.description_ar && "border-destructive focus-visible:ring-destructive"
+                      )}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    />
+                    {errors.description_ar && (
+                      <p className="text-sm text-destructive font-normal">{errors.description_ar.message}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="description_en" className="text-sm font-medium text-foreground">{t('properties.description_en') || 'Description (English)'}</Label>
+                    <textarea
+                      id="description_en"
+                      {...register('description_en')}
+                      className={cn(
+                        "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200",
+                        errors.description_en && "border-destructive focus-visible:ring-destructive"
+                      )}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    />
+                    {errors.description_en && (
+                      <p className="text-sm text-destructive font-normal">{errors.description_en.message}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="address_ar" className="text-sm font-medium text-foreground">Address (Arabic)</Label>
+                    <Input
+                      id="address_ar"
+                      {...register('address_ar')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className="transition-all duration-200"
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="address_en" className="text-sm font-medium text-foreground">Address (English)</Label>
+                    <Input
+                      id="address_en"
+                      {...register('address_en')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className="transition-all duration-200"
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Location */}
+            <Card className="border border-border/50 bg-card shadow-sm">
+              <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                  <MapPin className="h-4 w-4 text-muted-foreground" />
+                  Location
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-5">
+                <div className="grid grid-cols-4 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="governorate_id" className="text-sm font-medium text-foreground">{t('properties.governorate')}</Label>
+                    <SearchableSelect
+                      value={selectedGovernorate}
+                      onValueChange={(value) => {
+                        setSelectedGovernorate(value)
+                        setSelectedArea('none')
+                        setSelectedStreet('none')
+                        setValue('governorate_id', value === 'none' ? null : value)
+                        setValue('area_id', null)
+                        setValue('street_id', null)
+                      }}
+                      placeholder="Select governorate"
+                      searchPlaceholder="Search governorates..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Governorate' },
+                        ...(masterData?.governorates.map((gov: any) => ({
+                          value: gov.id,
+                          label: `${gov.name_en} / ${gov.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="area_id" className="text-sm font-medium text-foreground">{t('properties.area')}</Label>
+                    <SearchableSelect
+                      value={selectedArea}
+                      onValueChange={(value) => {
+                        setSelectedArea(value)
+                        setSelectedStreet('none')
+                        setValue('area_id', value === 'none' ? null : value)
+                        setValue('street_id', null)
+                      }}
+                      placeholder="Select area"
+                      searchPlaceholder="Search areas..."
+                      disabled={selectedGovernorate === 'none' || createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Area' },
+                        ...(areas?.map((area: any) => ({
+                          value: area.id,
+                          label: `${area.name_en} / ${area.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="street_id" className="text-sm font-medium text-foreground">Street</Label>
+                    <SearchableSelect
+                      value={selectedStreet}
+                      onValueChange={(value) => {
+                        setSelectedStreet(value)
+                        setValue('street_id', value === 'none' ? null : value)
+                      }}
+                      placeholder="Select street"
+                      searchPlaceholder="Search streets..."
+                      disabled={selectedArea === 'none' || createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Street' },
+                        ...(streets?.map((street: any) => ({
+                          value: street.id,
+                          label: `${street.name_en} / ${street.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="property_type_id" className="text-sm font-medium text-foreground">{t('properties.propertyType')}</Label>
+                    <SearchableSelect
+                      value={watch('property_type_id') || 'none'}
+                      onValueChange={(value) => setValue('property_type_id', value === 'none' ? null : value)}
+                      placeholder="Select type"
+                      searchPlaceholder="Search property types..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Type' },
+                        ...(masterData?.propertyTypes.map((type: any) => ({
+                          value: type.id,
+                          label: `${type.name_en} / ${type.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <GoogleMapsLocation
+                    locationText={watch('location_text') || ''}
+                    latitude={watch('latitude')}
+                    longitude={watch('longitude')}
+                    onLocationChange={(locationText, lat, lng) => {
+                      setValue('location_text', locationText)
+                      setValue('latitude', lat)
+                      setValue('longitude', lng)
+                    }}
+                    disabled={createMutation.isPending || updateMutation.isPending}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Section & Pricing */}
+            <Card className="border border-border/50 bg-card shadow-sm">
+              <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                  <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  Section & Pricing
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-5">
+                    <div className="space-y-2.5">
+                  <Label htmlFor="section_id" className="text-sm font-medium text-foreground">Section *</Label>
+                  <SearchableSelect
+                    value={watch('section_id') || 'none'}
+                    onValueChange={(value) => {
+                      setValue('section_id', value === 'none' ? null : value)
+                      // Reset daily rent pricing when section changes away from daily rent
+                      const newSection = masterData?.sections.find((s: any) => s.id === value)
+                      const newSectionNameEn = newSection?.name_en?.toLowerCase() || ''
+                      const newSectionNameAr = newSection?.name_ar?.toLowerCase() || ''
+                      const isNewDailyRent = (newSectionNameEn.includes('daily') && newSectionNameEn.includes('rent')) || 
+                                            newSectionNameAr.includes('يومي') || newSectionNameAr.includes('يومية')
+                      if (!isNewDailyRent) {
+                        setDailyRentPricing([])
+                      }
+                    }}
+                    placeholder="Select section"
+                    searchPlaceholder="Search sections..."
+                    disabled={createMutation.isPending || updateMutation.isPending}
+                    options={[
+                      { value: 'none', label: 'No Section' },
+                      ...(masterData?.sections.map((section: any) => ({
+                        value: section.id,
+                        label: `${section.name_en} / ${section.name_ar}`,
+                      })) || []),
+                    ]}
+                  />
+                  <p className="text-xs text-muted-foreground">Select a section to configure pricing options</p>
+                </div>
+
+                {/* Conditional Pricing Fields Based on Section */}
+                {isDailyRent && (
+                  <div className="mt-4 p-6 bg-muted/30 rounded-lg border border-border/50">
+                    <DailyRentPricing
+                      value={dailyRentPricing}
+                      onChange={setDailyRentPricing}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      currencySymbol={currencySymbol}
+                    />
+                  </div>
+                )}
+
+                {(isSaleOrRent || isSale || isRent) && (
+                  <div className="grid grid-cols-2 gap-6 mt-4">
+                    {(isSale || isSaleOrRent) && (
+                      <div className="space-y-2.5">
+                        <Label htmlFor="sale_price" className="text-sm font-medium text-foreground flex items-center gap-2">
+                          <DollarSign className="h-4 w-4 text-muted-foreground" />
+                          Sale Price ({currencySymbol})
+                        </Label>
+                        <Input
+                          id="sale_price"
+                          type="number"
+                          step="0.01"
+                          {...register('sale_price', { valueAsNumber: true })}
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                          className="transition-all duration-200"
+                          placeholder={`Enter price in ${currencySymbol}`}
+                        />
+                      </div>
+                    )}
+                    {(isRent || isSaleOrRent) && (
+                      <div className="space-y-2.5">
+                        <Label htmlFor="rent_price" className="text-sm font-medium text-foreground flex items-center gap-2">
+                          <DollarSign className="h-4 w-4 text-muted-foreground" />
+                          Rent Price ({currencySymbol})
+                        </Label>
+                        <Input
+                          id="rent_price"
+                          type="number"
+                          step="0.01"
+                          {...register('rent_price', { valueAsNumber: true })}
+                          disabled={createMutation.isPending || updateMutation.isPending}
+                          className="transition-all duration-200"
+                          placeholder={`Enter price in ${currencySymbol}`}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {/* Rental Period - shown only for rent sections */}
+                {(isRent || isSaleOrRent) && (
+                  <div className="mt-4">
+                    <div className="space-y-2.5">
+                      <Label htmlFor="rental_period" className="text-sm font-medium text-foreground flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-muted-foreground" />
+                        {t('properties.rentalPeriod') || 'Rental Period'}
+                      </Label>
+                      <Select
+                        value={watch('rental_period') || ''}
+                        onValueChange={(value) => setValue('rental_period', value === '' ? null : value as any)}
+                        disabled={createMutation.isPending || updateMutation.isPending}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('properties.selectRentalPeriod') || 'Select rental period'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="monthly">{t('properties.monthly') || 'Monthly'}</SelectItem>
+                          <SelectItem value="weekly">{t('properties.weekly') || 'Weekly'}</SelectItem>
+                          <SelectItem value="yearly">{t('properties.yearly') || 'Yearly'}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Default price field (shown when no specific pricing is needed) */}
+                {!isDailyRent && !isSaleOrRent && !isSale && !isRent && (
+                  <div className="mt-4">
+                    <Label htmlFor="price" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-muted-foreground" />
+                      {t('properties.price')} ({currencySymbol})
+                    </Label>
+                    <Input
+                      id="price"
+                      type="number"
+                      step="0.01"
+                      {...register('price', { valueAsNumber: true })}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className="transition-all duration-200 mt-2"
+                      placeholder={`Enter price in ${currencySymbol}`}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Property Specifications */}
+            <Card className="border border-border/50 bg-card shadow-sm">
+              <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                  <Settings className="h-4 w-4 text-muted-foreground" />
+                  Property Specifications
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6 space-y-5">
+                <div className="grid grid-cols-3 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="owner_id" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      Property Owner
+                    </Label>
+                    <SearchableSelect
+                      value={watch('owner_id') || 'none'}
+                      onValueChange={(value) => setValue('owner_id', value === 'none' ? null : value)}
+                      placeholder="Select owner"
+                      searchPlaceholder="Search owners..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Owner' },
+                        ...(masterData?.propertyOwners.map((owner: any) => ({
+                          value: owner.id,
+                          label: `${owner.name}${owner.email ? ` (${owner.email})` : ''}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="payment_method_id" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <CreditCard className="h-4 w-4 text-muted-foreground" />
+                      Payment Method
+                    </Label>
+                    <SearchableSelect
+                      value={watch('payment_method_id') || 'none'}
+                      onValueChange={(value) => setValue('payment_method_id', value === 'none' ? null : value)}
+                      placeholder="Select payment method"
+                      searchPlaceholder="Search payment methods..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Payment Method' },
+                        ...(masterData?.paymentMethods.map((method: any) => ({
+                          value: method.id,
+                          label: `${method.name_en} / ${method.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="phone_number" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <Phone className="h-4 w-4 text-muted-foreground" />
+                      Phone Number
+                    </Label>
+                    <PhoneInputField
+                      id="phone_number"
+                      name="phone_number"
+                      value={watch('phone_number') || ''}
+                      onChange={(value) => setValue('phone_number', value, { shouldValidate: true })}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      placeholder={t('properties.phonePlaceholder') || 'Enter phone number'}
+                      error={!!errors.phone_number}
+                    />
+                    {errors.phone_number && (
+                      <p className="text-sm text-destructive font-normal">{errors.phone_number.message}</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="view_type_id" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                      View Type
+                    </Label>
+                    <SearchableSelect
+                      value={watch('view_type_id') || 'none'}
+                      onValueChange={(value) => setValue('view_type_id', value === 'none' ? null : value)}
+                      placeholder="Select view type"
+                      searchPlaceholder="Search view types..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No View Type' },
+                        ...(masterData?.viewTypes.map((type: any) => ({
+                          value: type.id,
+                          label: `${type.name_en} / ${type.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="finishing_type_id" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <Paintbrush className="h-4 w-4 text-muted-foreground" />
+                      Finishing Type
+                    </Label>
+                    <SearchableSelect
+                      value={watch('finishing_type_id') || 'none'}
+                      onValueChange={(value) => setValue('finishing_type_id', value === 'none' ? null : value)}
+                      placeholder="Select finishing type"
+                      searchPlaceholder="Search finishing types..."
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      options={[
+                        { value: 'none', label: 'No Finishing Type' },
+                        ...(masterData?.finishingTypes.map((type: any) => ({
+                          value: type.id,
+                          label: `${type.name_en} / ${type.name_ar}`,
+                        })) || []),
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                {/* Group 1: Size, Baths, Number of Rooms, Number of Receptions */}
+                <div className="grid grid-cols-4 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="size" className="text-sm font-medium text-foreground">{t('properties.size') || 'Size (m²)'}</Label>
+                    <Input
+                      id="size"
+                      type="number"
+                      step="0.01"
+                      {...register('size', { valueAsNumber: true })}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className="transition-all duration-200"
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="baths" className="text-sm font-medium text-foreground">{t('properties.baths') || 'Baths'}</Label>
+                    <Select
+                      value={watch('baths') !== undefined && watch('baths') !== null 
+                        ? (watch('baths')! > 100 ? 'more_than_100' : watch('baths')!.toString())
+                        : ''}
+                      onValueChange={(value) => {
+                        if (value === 'more_than_100') {
+                          setValue('baths', 101, { shouldValidate: true })
+                        } else if (value === '') {
+                          setValue('baths', undefined, { shouldValidate: true })
+                        } else {
+                          setValue('baths', parseInt(value), { shouldValidate: true })
+                        }
+                      }}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('properties.baths') || 'Select baths'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
+                          <SelectItem key={num} value={num.toString()}>
+                            {num}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="more_than_100">
+                          {t('properties.moreThan100') || 'More than 100'}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="no_of_rooms" className="text-sm font-medium text-foreground">{t('properties.noOfRooms') || 'Number of Rooms'}</Label>
+                    <Select
+                      value={watch('no_of_rooms') !== undefined && watch('no_of_rooms') !== null 
+                        ? (watch('no_of_rooms')! > 100 ? 'more_than_100' : watch('no_of_rooms')!.toString())
+                        : ''}
+                      onValueChange={(value) => {
+                        if (value === 'more_than_100') {
+                          setValue('no_of_rooms', 101, { shouldValidate: true })
+                        } else if (value === '') {
+                          setValue('no_of_rooms', undefined, { shouldValidate: true })
+                        } else {
+                          setValue('no_of_rooms', parseInt(value), { shouldValidate: true })
+                        }
+                      }}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('properties.noOfRooms') || 'Select rooms'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
+                          <SelectItem key={num} value={num.toString()}>
+                            {num}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="more_than_100">
+                          {t('properties.moreThan100') || 'More than 100'}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="no_of_receptions" className="text-sm font-medium text-foreground">{t('properties.noOfReceptions') || 'Number of Receptions'}</Label>
+                    <Select
+                      value={watch('no_of_receptions') !== undefined && watch('no_of_receptions') !== null 
+                        ? (watch('no_of_receptions')! > 100 ? 'more_than_100' : watch('no_of_receptions')!.toString())
+                        : ''}
+                      onValueChange={(value) => {
+                        if (value === 'more_than_100') {
+                          setValue('no_of_receptions', 101, { shouldValidate: true })
+                        } else if (value === '') {
+                          setValue('no_of_receptions', undefined, { shouldValidate: true })
+                        } else {
+                          setValue('no_of_receptions', parseInt(value), { shouldValidate: true })
+                        }
+                      }}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={t('properties.noOfReceptions') || 'Select receptions'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
+                          <SelectItem key={num} value={num.toString()}>
+                            {num}
+                          </SelectItem>
+                        ))}
+                        <SelectItem value="more_than_100">
+                          {t('properties.moreThan100') || 'More than 100'}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Group 2: Building No, Apartment No, Floor No */}
+                <div className="grid grid-cols-3 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="building_no" className="text-sm font-medium text-foreground">{t('properties.buildingNo') || 'Building Number'}</Label>
+                    <Input
+                      id="building_no"
+                      type="text"
+                      {...register('building_no')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      placeholder="e.g., 15"
+                      className="transition-all duration-200"
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="apartment_no" className="text-sm font-medium text-foreground">{t('properties.apartmentNo') || 'Apartment Number'}</Label>
+                    <Input
+                      id="apartment_no"
+                      type="text"
+                      {...register('apartment_no')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      placeholder="e.g., 3A"
+                      className="transition-all duration-200"
+                    />
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="floor_no" className="text-sm font-medium text-foreground">{t('properties.floorNo') || 'Floor No'}</Label>
+                    <Input
+                      id="floor_no"
+                      type="number"
+                      {...register('floor_no', { valueAsNumber: true })}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      className="transition-all duration-200"
+                    />
+                  </div>
+                </div>
+
+                {/* YouTube URL and Property Note */}
+                <div className="grid grid-cols-1 gap-6">
+                  <div className="space-y-2.5">
+                    <Label htmlFor="youtube_url" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <Youtube className="h-4 w-4 text-muted-foreground" />
+                      {t('properties.youtubeUrl') || 'YouTube URL'}
+                    </Label>
+                    <Input
+                      id="youtube_url"
+                      type="url"
+                      {...register('youtube_url')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      className="transition-all duration-200"
+                    />
+                    {errors.youtube_url && (
+                      <p className="text-sm text-destructive">{errors.youtube_url.message}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <Label htmlFor="property_note" className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                      {t('properties.propertyNote') || 'Property Note'}
+                    </Label>
+                    <textarea
+                      id="property_note"
+                      {...register('property_note')}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                      placeholder={t('properties.propertyNotePlaceholder') || 'Enter any additional notes about this property...'}
+                      rows={4}
+                      className={`flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 transition-all duration-200 ${
+                        errors.property_note ? 'border-destructive focus-visible:ring-destructive' : ''
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-6 pt-4 border-t border-border/50">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="is_featured"
+                      checked={isFeatured}
+                      onChange={(e) => setValue('is_featured', e.target.checked)}
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                    />
+                    <Label htmlFor="is_featured" className="text-sm font-medium text-foreground flex items-center gap-2 cursor-pointer">
+                      <Star className="h-4 w-4 text-yellow-500" />
+                      {t('properties.isFeatured')}
+                    </Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="is_rented"
+                      checked={isRented}
+                      onChange={(e) => {
+                        setValue('is_rented', e.target.checked)
+                        // Clear rental_end_date if unchecking is_rented
+                        if (!e.target.checked) {
+                          setValue('rental_end_date', undefined)
+                        }
+                      }}
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                    />
+                    <Label htmlFor="is_rented" className="text-sm font-medium text-foreground cursor-pointer">{t('properties.isRented') || 'Is Rented'}</Label>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="is_sold"
+                      checked={isSold}
+                      onChange={(e) => setValue('is_sold', e.target.checked)}
+                      className="h-4 w-4 rounded border-border text-primary focus:ring-2 focus:ring-primary focus:ring-offset-2"
+                    />
+                    <Label htmlFor="is_sold" className="text-sm font-medium text-foreground cursor-pointer">Is Sold</Label>
+                  </div>
+                </div>
+
+                {/* Rental End Date - shown when is_rented is checked */}
+                {isRented && (
+                  <div className="mt-4">
+                    <div className="space-y-2.5">
+                      <Label htmlFor="rental_end_date" className="text-sm font-medium text-foreground flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-muted-foreground" />
+                        {t('properties.rentalEndDate') || 'Rental End Date'}
+                      </Label>
+                      <Input
+                        id="rental_end_date"
+                        type="date"
+                        {...register('rental_end_date')}
+                        disabled={createMutation.isPending || updateMutation.isPending}
+                        min={new Date().toISOString().split('T')[0]}
+                        className="transition-all duration-200"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {t('properties.rentalEndDateHint') || 'The property will automatically be marked as not rented after this date'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Facilities & Services */}
+            <Card className="border border-border/50 bg-card shadow-sm">
+              <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                  <Layers className="h-4 w-4 text-muted-foreground" />
+                  Facilities & Services
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-6">
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <Label className="text-base font-semibold">Property Facilities</Label>
+                    <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4 bg-muted/30">
+                      {masterData?.facilities && masterData.facilities.length > 0 ? (
+                        masterData.facilities.map((facility: any) => (
+                          <div key={facility.id} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`facility-${facility.id}`}
+                              checked={selectedFacilities.includes(facility.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedFacilities([...selectedFacilities, facility.id])
+                                } else {
+                                  setSelectedFacilities(selectedFacilities.filter(id => id !== facility.id))
+                                }
+                              }}
+                              disabled={createMutation.isPending || updateMutation.isPending}
+                              className="h-4 w-4 rounded border-gray-300"
+                            />
+                            <Label htmlFor={`facility-${facility.id}`} className="font-normal cursor-pointer">
+                              {facility.name_en} / {facility.name_ar}
+                            </Label>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No facilities available</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-base font-semibold">Property Services</Label>
+                    <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4 bg-muted/30">
+                      {masterData?.services && masterData.services.length > 0 ? (
+                        masterData.services.map((service: any) => (
+                          <div key={service.id} className="flex items-center space-x-2">
+                            <input
+                              type="checkbox"
+                              id={`service-${service.id}`}
+                              checked={selectedServices.includes(service.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedServices([...selectedServices, service.id])
+                                } else {
+                                  setSelectedServices(selectedServices.filter(id => id !== service.id))
+                                }
+                              }}
+                              disabled={createMutation.isPending || updateMutation.isPending}
+                              className="h-4 w-4 rounded border-gray-300"
+                            />
+                            <Label htmlFor={`service-${service.id}`} className="font-normal cursor-pointer">
+                              {service.name_en} / {service.name_ar}
+                            </Label>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No services available</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Property Images Upload */}
+            {expandedRowId && (
+              <Card className="border border-border/50 bg-card shadow-sm">
+                <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
+                  <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
+                    <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    Property Images
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  <PropertyImageUpload
+                    propertyId={expandedRowId}
+                    images={propertyImages}
+                    onImagesChange={setPropertyImages}
+                    disabled={createMutation.isPending || updateMutation.isPending}
+                  />
+                </CardContent>
+              </Card>
+            )}
+
+            <div className="flex justify-end gap-3 pt-6 border-t border-border/50 mt-8 sticky bottom-0 bg-background/95 backdrop-blur-sm pb-2 -mb-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  handleToggleExpand(null)
+                }}
+                className="min-w-[100px] transition-all duration-200 hover:bg-muted"
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button
+                type="submit"
+                disabled={createMutation.isPending || updateMutation.isPending}
+                className="min-w-[100px] transition-all duration-200 hover:opacity-90"
+              >
+                {createMutation.isPending || updateMutation.isPending
+                  ? (
+                    <span className="flex items-center gap-2">
+                      <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                      {t('common.loading')}
+                    </span>
+                  )
+                  : t('common.save')}
+              </Button>
+            </div>
+          </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Advanced Filters - Always Visible */}
       <Card className="border-2">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -1684,7 +2811,7 @@ export default function PropertiesPage() {
           <CardContent className="pt-0">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {/* Status Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Status</Label>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
                   <SelectTrigger>
@@ -1705,7 +2832,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Section Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Section</Label>
                 <SearchableSelect
                   value={filterSection}
@@ -1723,7 +2850,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Property Type Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Property Type</Label>
                 <SearchableSelect
                   value={filterPropertyType}
@@ -1741,7 +2868,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Governorate Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Governorate</Label>
                 <SearchableSelect
                   value={filterGovernorate}
@@ -1762,7 +2889,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Area Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Area</Label>
                 <SearchableSelect
                   value={filterArea}
@@ -1781,7 +2908,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Owner Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Owner</Label>
                 <SearchableSelect
                   value={filterOwner}
@@ -1799,7 +2926,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* View Type Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>View Type</Label>
                 <SearchableSelect
                   value={filterViewType}
@@ -1817,7 +2944,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Finishing Type Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Finishing Type</Label>
                 <SearchableSelect
                   value={filterFinishingType}
@@ -1835,7 +2962,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Payment Method Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Payment Method</Label>
                 <SearchableSelect
                   value={filterPaymentMethod}
@@ -1853,7 +2980,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Featured Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Featured</Label>
                 <Select value={filterIsFeatured} onValueChange={setFilterIsFeatured}>
                   <SelectTrigger>
@@ -1868,7 +2995,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Rented Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Rented</Label>
                 <Select value={filterIsRented} onValueChange={setFilterIsRented}>
                   <SelectTrigger>
@@ -1883,7 +3010,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Sold Filter */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Sold</Label>
                 <Select value={filterIsSold} onValueChange={setFilterIsSold}>
                   <SelectTrigger>
@@ -1898,7 +3025,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Price Range */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Min Price</Label>
                 <Input
                   type="number"
@@ -1908,7 +3035,7 @@ export default function PropertiesPage() {
                 />
               </div>
 
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Max Price</Label>
                 <Input
                   type="number"
@@ -1919,7 +3046,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Size Range */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Min Size (m²)</Label>
                 <Input
                   type="number"
@@ -1929,7 +3056,7 @@ export default function PropertiesPage() {
                 />
               </div>
 
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Max Size (m²)</Label>
                 <Input
                   type="number"
@@ -1940,7 +3067,7 @@ export default function PropertiesPage() {
               </div>
 
               {/* Date Range */}
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Created From</Label>
                 <Input
                   type="date"
@@ -1949,7 +3076,7 @@ export default function PropertiesPage() {
                 />
               </div>
 
-              <div className="space-y-2">
+                    <div className="space-y-2.5">
                 <Label>Created To</Label>
                 <Input
                   type="date"
@@ -1962,6 +3089,7 @@ export default function PropertiesPage() {
         )}
       </Card>
 
+      {/* Properties List - Always Visible */}
       <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -2020,28 +3148,32 @@ export default function PropertiesPage() {
             searchKey="title_en"
             searchPlaceholder={t('common.search')}
             itemsPerPage={itemsPerPage}
-            actions={(property) => (
-              <div className="flex gap-2">
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleEdit(property)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                )}
-                {canDelete && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => handleDelete(property)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-            )}
+            actions={(property) => {
+              const isExpanded = expandedRowId === property.id
+              return (
+                <div className="flex gap-2">
+                  {canEdit && (
+                    <Button
+                      variant={isExpanded ? "default" : "ghost"}
+                      size="icon"
+                      onClick={() => handleToggleExpand(property, true)}
+                      title={isExpanded ? "Collapse" : "Edit"}
+                    >
+                      {isExpanded ? <ChevronUp className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                    </Button>
+                  )}
+                  {canDelete && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDelete(property)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              )
+            }}
           />
           ) : (
             <>
@@ -2186,938 +3318,6 @@ export default function PropertiesPage() {
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="max-w-6xl max-h-[95vh] overflow-y-auto bg-gradient-to-br from-background via-background to-muted/20">
-          <DialogHeader className="bg-gradient-to-r from-primary/10 via-purple-500/10 to-pink-500/10 p-6 rounded-lg border-2 border-primary/20 -m-6 mb-4">
-            <DialogTitle className="text-2xl font-bold bg-gradient-to-r from-primary via-purple-600 to-pink-600 bg-clip-text text-transparent flex items-center gap-3">
-              <Building2 className="h-7 w-7 text-primary" />
-              {editingProperty ? t('properties.editProperty') : t('properties.createProperty')}
-            </DialogTitle>
-            <DialogDescription className="text-base mt-2">
-              {editingProperty ? 'Update property information and settings' : 'Fill in the details to create a new property listing'}
-            </DialogDescription>
-          </DialogHeader>
-          <form 
-            onSubmit={handleSubmit(
-              (data) => onSubmit(data),
-              (errors) => {
-                // Scroll to first error field
-                const firstErrorField = Object.keys(errors)[0]
-                if (firstErrorField) {
-                  setTimeout(() => {
-                    const element = document.getElementById(firstErrorField)
-                    if (element) {
-                      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                      element.focus()
-                    }
-                  }, 100)
-                }
-              }
-            )} 
-            className="space-y-6"
-          >
-            {/* Basic Information */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-blue-50/50 via-background to-purple-50/50 dark:from-blue-950/20 dark:via-background dark:to-purple-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <Building2 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                  Basic Information
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="code">
-                      {t('properties.code')} <span className="text-xs text-muted-foreground">(Auto-generated)</span>
-                    </Label>
-                    <Input
-                      id="code"
-                      value={editingProperty?.code || (nextCode || 'Calculating...')}
-                      disabled={true}
-                      className="bg-blue-50 dark:bg-blue-950 border-blue-300 dark:border-blue-700 text-blue-900 dark:text-blue-100 font-semibold cursor-not-allowed"
-                      readOnly
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {editingProperty 
-                        ? 'Code cannot be changed after creation' 
-                        : `Next code that will be assigned: ${nextCode || 'Calculating...'}`}
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="status">{t('properties.status')}</Label>
-                    <Select
-                      onValueChange={(value) => setValue('status', value as any)}
-                      value={selectedStatus || 'pending'}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
-                        <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
-                        <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
-                        <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
-                        <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
-                        <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
-                        <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
-                        <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Property Details */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-green-50/50 via-background to-teal-50/50 dark:from-green-950/20 dark:via-background dark:to-teal-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-green-500/10 to-teal-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <Home className="h-5 w-5 text-green-600 dark:text-green-400" />
-                  Property Details
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="title_ar">
-                      {t('properties.title_ar')} <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="title_ar"
-                      {...register('title_ar')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      className={cn(
-                        errors.title_ar && "border-destructive border-2 focus-visible:ring-destructive"
-                      )}
-                    />
-                    {errors.title_ar && (
-                      <p className="text-sm text-destructive">{errors.title_ar.message}</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="title_en">
-                      {t('properties.title_en')} <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="title_en"
-                      {...register('title_en')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      className={cn(
-                        errors.title_en && "border-destructive border-2 focus-visible:ring-destructive"
-                      )}
-                    />
-                    {errors.title_en && (
-                      <p className="text-sm text-destructive">{errors.title_en.message}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="description_ar">{t('properties.description_ar') || 'Description (Arabic)'}</Label>
-                    <textarea
-                      id="description_ar"
-                      {...register('description_ar')}
-                      className={cn(
-                        "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-                        errors.description_ar && "border-destructive border-2 focus-visible:ring-destructive"
-                      )}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                    {errors.description_ar && (
-                      <p className="text-sm text-destructive">{errors.description_ar.message}</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="description_en">{t('properties.description_en') || 'Description (English)'}</Label>
-                    <textarea
-                      id="description_en"
-                      {...register('description_en')}
-                      className={cn(
-                        "flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
-                        errors.description_en && "border-destructive border-2 focus-visible:ring-destructive"
-                      )}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                    {errors.description_en && (
-                      <p className="text-sm text-destructive">{errors.description_en.message}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="address_ar">Address (Arabic)</Label>
-                    <Input
-                      id="address_ar"
-                      {...register('address_ar')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="address_en">Address (English)</Label>
-                    <Input
-                      id="address_en"
-                      {...register('address_en')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Location */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-orange-50/50 via-background to-red-50/50 dark:from-orange-950/20 dark:via-background dark:to-red-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-orange-500/10 to-red-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <MapPin className="h-5 w-5 text-orange-600 dark:text-orange-400" />
-                  Location
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-4 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="governorate_id">{t('properties.governorate')}</Label>
-                    <SearchableSelect
-                      value={selectedGovernorate}
-                      onValueChange={(value) => {
-                        setSelectedGovernorate(value)
-                        setSelectedArea('none')
-                        setSelectedStreet('none')
-                        setValue('governorate_id', value === 'none' ? null : value)
-                        setValue('area_id', null)
-                        setValue('street_id', null)
-                      }}
-                      placeholder="Select governorate"
-                      searchPlaceholder="Search governorates..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Governorate' },
-                        ...(masterData?.governorates.map((gov: any) => ({
-                          value: gov.id,
-                          label: `${gov.name_en} / ${gov.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="area_id">{t('properties.area')}</Label>
-                    <SearchableSelect
-                      value={selectedArea}
-                      onValueChange={(value) => {
-                        setSelectedArea(value)
-                        setSelectedStreet('none')
-                        setValue('area_id', value === 'none' ? null : value)
-                        setValue('street_id', null)
-                      }}
-                      placeholder="Select area"
-                      searchPlaceholder="Search areas..."
-                      disabled={selectedGovernorate === 'none' || createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Area' },
-                        ...(areas?.map((area: any) => ({
-                          value: area.id,
-                          label: `${area.name_en} / ${area.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="street_id">Street</Label>
-                    <SearchableSelect
-                      value={selectedStreet}
-                      onValueChange={(value) => {
-                        setSelectedStreet(value)
-                        setValue('street_id', value === 'none' ? null : value)
-                      }}
-                      placeholder="Select street"
-                      searchPlaceholder="Search streets..."
-                      disabled={selectedArea === 'none' || createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Street' },
-                        ...(streets?.map((street: any) => ({
-                          value: street.id,
-                          label: `${street.name_en} / ${street.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="property_type_id">{t('properties.propertyType')}</Label>
-                    <SearchableSelect
-                      value={watch('property_type_id') || 'none'}
-                      onValueChange={(value) => setValue('property_type_id', value === 'none' ? null : value)}
-                      placeholder="Select type"
-                      searchPlaceholder="Search property types..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Type' },
-                        ...(masterData?.propertyTypes.map((type: any) => ({
-                          value: type.id,
-                          label: `${type.name_en} / ${type.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <GoogleMapsLocation
-                    locationText={watch('location_text') || ''}
-                    latitude={watch('latitude')}
-                    longitude={watch('longitude')}
-                    onLocationChange={(locationText, lat, lng) => {
-                      setValue('location_text', locationText)
-                      setValue('latitude', lat)
-                      setValue('longitude', lng)
-                    }}
-                    disabled={createMutation.isPending || updateMutation.isPending}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Section & Pricing */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-yellow-50/50 via-background to-amber-50/50 dark:from-yellow-950/20 dark:via-background dark:to-amber-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-yellow-500/10 to-amber-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <DollarSign className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
-                  Section & Pricing
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="section_id" className="text-base font-semibold">Section *</Label>
-                  <SearchableSelect
-                    value={watch('section_id') || 'none'}
-                    onValueChange={(value) => {
-                      setValue('section_id', value === 'none' ? null : value)
-                      // Reset daily rent pricing when section changes away from daily rent
-                      const newSection = masterData?.sections.find((s: any) => s.id === value)
-                      const newSectionNameEn = newSection?.name_en?.toLowerCase() || ''
-                      const newSectionNameAr = newSection?.name_ar?.toLowerCase() || ''
-                      const isNewDailyRent = (newSectionNameEn.includes('daily') && newSectionNameEn.includes('rent')) || 
-                                            newSectionNameAr.includes('يومي') || newSectionNameAr.includes('يومية')
-                      if (!isNewDailyRent) {
-                        setDailyRentPricing([])
-                      }
-                    }}
-                    placeholder="Select section"
-                    searchPlaceholder="Search sections..."
-                    disabled={createMutation.isPending || updateMutation.isPending}
-                    options={[
-                      { value: 'none', label: 'No Section' },
-                      ...(masterData?.sections.map((section: any) => ({
-                        value: section.id,
-                        label: `${section.name_en} / ${section.name_ar}`,
-                      })) || []),
-                    ]}
-                  />
-                  <p className="text-xs text-muted-foreground">Select a section to configure pricing options</p>
-                </div>
-
-                {/* Conditional Pricing Fields Based on Section */}
-                {isDailyRent && (
-                  <div className="mt-4 p-6 bg-gradient-to-br from-indigo-50/30 via-background to-purple-50/30 dark:from-indigo-950/10 dark:via-background dark:to-purple-950/10 rounded-xl border-2 border-indigo-300/50 dark:border-indigo-700/50 shadow-md">
-                    <DailyRentPricing
-                      value={dailyRentPricing}
-                      onChange={setDailyRentPricing}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      currencySymbol={currencySymbol}
-                    />
-                  </div>
-                )}
-
-                {(isSaleOrRent || isSale || isRent) && (
-                  <div className="grid grid-cols-2 gap-4 mt-4">
-                    {(isSale || isSaleOrRent) && (
-                      <div className="space-y-2">
-                        <Label htmlFor="sale_price" className="flex items-center gap-2">
-                          <DollarSign className="h-4 w-4" />
-                          Sale Price ({currencySymbol})
-                        </Label>
-                        <Input
-                          id="sale_price"
-                          type="number"
-                          step="0.01"
-                          {...register('sale_price', { valueAsNumber: true })}
-                          disabled={createMutation.isPending || updateMutation.isPending}
-                          className="text-lg font-semibold"
-                          placeholder={`Enter price in ${currencySymbol}`}
-                        />
-                      </div>
-                    )}
-                    {(isRent || isSaleOrRent) && (
-                      <div className="space-y-2">
-                        <Label htmlFor="rent_price" className="flex items-center gap-2">
-                          <DollarSign className="h-4 w-4" />
-                          Rent Price ({currencySymbol})
-                        </Label>
-                        <Input
-                          id="rent_price"
-                          type="number"
-                          step="0.01"
-                          {...register('rent_price', { valueAsNumber: true })}
-                          disabled={createMutation.isPending || updateMutation.isPending}
-                          className="text-lg font-semibold"
-                          placeholder={`Enter price in ${currencySymbol}`}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-                
-                {/* Rental Period - shown only for rent sections */}
-                {(isRent || isSaleOrRent) && (
-                  <div className="mt-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="rental_period" className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4" />
-                        {t('properties.rentalPeriod') || 'Rental Period'}
-                      </Label>
-                      <Select
-                        value={watch('rental_period') || ''}
-                        onValueChange={(value) => setValue('rental_period', value === '' ? null : value as any)}
-                        disabled={createMutation.isPending || updateMutation.isPending}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder={t('properties.selectRentalPeriod') || 'Select rental period'} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="monthly">{t('properties.monthly') || 'Monthly'}</SelectItem>
-                          <SelectItem value="weekly">{t('properties.weekly') || 'Weekly'}</SelectItem>
-                          <SelectItem value="yearly">{t('properties.yearly') || 'Yearly'}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                )}
-
-                {/* Default price field (shown when no specific pricing is needed) */}
-                {!isDailyRent && !isSaleOrRent && !isSale && !isRent && (
-                  <div className="mt-4">
-                    <Label htmlFor="price" className="flex items-center gap-2">
-                      <DollarSign className="h-4 w-4" />
-                      {t('properties.price')} ({currencySymbol})
-                    </Label>
-                    <Input
-                      id="price"
-                      type="number"
-                      step="0.01"
-                      {...register('price', { valueAsNumber: true })}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      className="text-lg font-semibold mt-2"
-                      placeholder={`Enter price in ${currencySymbol}`}
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Property Specifications */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-indigo-50/50 via-background to-violet-50/50 dark:from-indigo-950/20 dark:via-background dark:to-violet-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-indigo-500/10 to-violet-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <Settings className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
-                  Property Specifications
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="owner_id" className="flex items-center gap-2">
-                      <Users className="h-4 w-4" />
-                      Property Owner
-                    </Label>
-                    <SearchableSelect
-                      value={watch('owner_id') || 'none'}
-                      onValueChange={(value) => setValue('owner_id', value === 'none' ? null : value)}
-                      placeholder="Select owner"
-                      searchPlaceholder="Search owners..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Owner' },
-                        ...(masterData?.propertyOwners.map((owner: any) => ({
-                          value: owner.id,
-                          label: `${owner.name}${owner.email ? ` (${owner.email})` : ''}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="payment_method_id" className="flex items-center gap-2">
-                      <CreditCard className="h-4 w-4" />
-                      Payment Method
-                    </Label>
-                    <SearchableSelect
-                      value={watch('payment_method_id') || 'none'}
-                      onValueChange={(value) => setValue('payment_method_id', value === 'none' ? null : value)}
-                      placeholder="Select payment method"
-                      searchPlaceholder="Search payment methods..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Payment Method' },
-                        ...(masterData?.paymentMethods.map((method: any) => ({
-                          value: method.id,
-                          label: `${method.name_en} / ${method.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="phone_number" className="flex items-center gap-2">
-                      <Phone className="h-4 w-4" />
-                      Phone Number
-                    </Label>
-                    <PhoneInputField
-                      id="phone_number"
-                      name="phone_number"
-                      value={watch('phone_number') || ''}
-                      onChange={(value) => setValue('phone_number', value, { shouldValidate: true })}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      placeholder={t('properties.phonePlaceholder') || 'Enter phone number'}
-                      error={!!errors.phone_number}
-                    />
-                    {errors.phone_number && (
-                      <p className="text-sm text-destructive">{errors.phone_number.message}</p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="view_type_id" className="flex items-center gap-2">
-                      <Eye className="h-4 w-4" />
-                      View Type
-                    </Label>
-                    <SearchableSelect
-                      value={watch('view_type_id') || 'none'}
-                      onValueChange={(value) => setValue('view_type_id', value === 'none' ? null : value)}
-                      placeholder="Select view type"
-                      searchPlaceholder="Search view types..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No View Type' },
-                        ...(masterData?.viewTypes.map((type: any) => ({
-                          value: type.id,
-                          label: `${type.name_en} / ${type.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="finishing_type_id" className="flex items-center gap-2">
-                      <Paintbrush className="h-4 w-4" />
-                      Finishing Type
-                    </Label>
-                    <SearchableSelect
-                      value={watch('finishing_type_id') || 'none'}
-                      onValueChange={(value) => setValue('finishing_type_id', value === 'none' ? null : value)}
-                      placeholder="Select finishing type"
-                      searchPlaceholder="Search finishing types..."
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      options={[
-                        { value: 'none', label: 'No Finishing Type' },
-                        ...(masterData?.finishingTypes.map((type: any) => ({
-                          value: type.id,
-                          label: `${type.name_en} / ${type.name_ar}`,
-                        })) || []),
-                      ]}
-                    />
-                  </div>
-                </div>
-
-                {/* Group 1: Size, Baths, Number of Rooms, Number of Receptions */}
-                <div className="grid grid-cols-4 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="size">{t('properties.size') || 'Size (m²)'}</Label>
-                    <Input
-                      id="size"
-                      type="number"
-                      step="0.01"
-                      {...register('size', { valueAsNumber: true })}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="baths">{t('properties.baths') || 'Baths'}</Label>
-                    <Select
-                      value={watch('baths') !== undefined && watch('baths') !== null 
-                        ? (watch('baths')! > 100 ? 'more_than_100' : watch('baths')!.toString())
-                        : ''}
-                      onValueChange={(value) => {
-                        if (value === 'more_than_100') {
-                          setValue('baths', 101, { shouldValidate: true })
-                        } else if (value === '') {
-                          setValue('baths', undefined, { shouldValidate: true })
-                        } else {
-                          setValue('baths', parseInt(value), { shouldValidate: true })
-                        }
-                      }}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('properties.baths') || 'Select baths'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
-                          <SelectItem key={num} value={num.toString()}>
-                            {num}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value="more_than_100">
-                          {t('properties.moreThan100') || 'More than 100'}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="no_of_rooms">{t('properties.noOfRooms') || 'Number of Rooms'}</Label>
-                    <Select
-                      value={watch('no_of_rooms') !== undefined && watch('no_of_rooms') !== null 
-                        ? (watch('no_of_rooms')! > 100 ? 'more_than_100' : watch('no_of_rooms')!.toString())
-                        : ''}
-                      onValueChange={(value) => {
-                        if (value === 'more_than_100') {
-                          setValue('no_of_rooms', 101, { shouldValidate: true })
-                        } else if (value === '') {
-                          setValue('no_of_rooms', undefined, { shouldValidate: true })
-                        } else {
-                          setValue('no_of_rooms', parseInt(value), { shouldValidate: true })
-                        }
-                      }}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('properties.noOfRooms') || 'Select rooms'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
-                          <SelectItem key={num} value={num.toString()}>
-                            {num}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value="more_than_100">
-                          {t('properties.moreThan100') || 'More than 100'}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="no_of_receptions">{t('properties.noOfReceptions') || 'Number of Receptions'}</Label>
-                    <Select
-                      value={watch('no_of_receptions') !== undefined && watch('no_of_receptions') !== null 
-                        ? (watch('no_of_receptions')! > 100 ? 'more_than_100' : watch('no_of_receptions')!.toString())
-                        : ''}
-                      onValueChange={(value) => {
-                        if (value === 'more_than_100') {
-                          setValue('no_of_receptions', 101, { shouldValidate: true })
-                        } else if (value === '') {
-                          setValue('no_of_receptions', undefined, { shouldValidate: true })
-                        } else {
-                          setValue('no_of_receptions', parseInt(value), { shouldValidate: true })
-                        }
-                      }}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder={t('properties.noOfReceptions') || 'Select receptions'} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Array.from({ length: 100 }, (_, i) => i + 1).map((num) => (
-                          <SelectItem key={num} value={num.toString()}>
-                            {num}
-                          </SelectItem>
-                        ))}
-                        <SelectItem value="more_than_100">
-                          {t('properties.moreThan100') || 'More than 100'}
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Group 2: Building No, Apartment No, Floor No */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="building_no">{t('properties.buildingNo') || 'Building Number'}</Label>
-                    <Input
-                      id="building_no"
-                      type="text"
-                      {...register('building_no')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      placeholder="e.g., 15"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="apartment_no">{t('properties.apartmentNo') || 'Apartment Number'}</Label>
-                    <Input
-                      id="apartment_no"
-                      type="text"
-                      {...register('apartment_no')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      placeholder="e.g., 3A"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="floor_no">{t('properties.floorNo') || 'Floor No'}</Label>
-                    <Input
-                      id="floor_no"
-                      type="number"
-                      {...register('floor_no', { valueAsNumber: true })}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                    />
-                  </div>
-                </div>
-
-                {/* YouTube URL and Property Note */}
-                <div className="grid grid-cols-1 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="youtube_url" className="flex items-center gap-2">
-                      <Youtube className="h-4 w-4" />
-                      {t('properties.youtubeUrl') || 'YouTube URL'}
-                    </Label>
-                    <Input
-                      id="youtube_url"
-                      type="url"
-                      {...register('youtube_url')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      placeholder="https://www.youtube.com/watch?v=..."
-                    />
-                    {errors.youtube_url && (
-                      <p className="text-sm text-destructive">{errors.youtube_url.message}</p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="property_note" className="flex items-center gap-2">
-                      <FileText className="h-4 w-4" />
-                      {t('properties.propertyNote') || 'Property Note'}
-                    </Label>
-                    <textarea
-                      id="property_note"
-                      {...register('property_note')}
-                      disabled={createMutation.isPending || updateMutation.isPending}
-                      placeholder={t('properties.propertyNotePlaceholder') || 'Enter any additional notes about this property...'}
-                      rows={4}
-                      className={`flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                        errors.property_note ? 'border-destructive border-2 focus-visible:ring-destructive' : ''
-                      }`}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-6 pt-2 border-t">
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="is_featured"
-                      checked={isFeatured}
-                      onChange={(e) => setValue('is_featured', e.target.checked)}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_featured" className="flex items-center gap-2 cursor-pointer">
-                      <Star className="h-4 w-4 text-yellow-500" />
-                      {t('properties.isFeatured')}
-                    </Label>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="is_rented"
-                      checked={isRented}
-                      onChange={(e) => {
-                        setValue('is_rented', e.target.checked)
-                        // Clear rental_end_date if unchecking is_rented
-                        if (!e.target.checked) {
-                          setValue('rental_end_date', undefined)
-                        }
-                      }}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_rented" className="cursor-pointer">{t('properties.isRented') || 'Is Rented'}</Label>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id="is_sold"
-                      checked={isSold}
-                      onChange={(e) => setValue('is_sold', e.target.checked)}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    <Label htmlFor="is_sold" className="cursor-pointer">Is Sold</Label>
-                  </div>
-                </div>
-
-                {/* Rental End Date - shown when is_rented is checked */}
-                {isRented && (
-                  <div className="mt-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="rental_end_date" className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4" />
-                        {t('properties.rentalEndDate') || 'Rental End Date'}
-                      </Label>
-                      <Input
-                        id="rental_end_date"
-                        type="date"
-                        {...register('rental_end_date')}
-                        disabled={createMutation.isPending || updateMutation.isPending}
-                        min={new Date().toISOString().split('T')[0]}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        {t('properties.rentalEndDateHint') || 'The property will automatically be marked as not rented after this date'}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Facilities & Services */}
-            <Card className="border-2 border-primary/30 bg-gradient-to-br from-rose-50/50 via-background to-pink-50/50 dark:from-rose-950/20 dark:via-background dark:to-pink-950/20 shadow-lg hover:shadow-xl transition-all">
-              <CardHeader className="pb-3 bg-gradient-to-r from-rose-500/10 to-pink-500/10 rounded-t-lg border-b-2 border-primary/20">
-                <CardTitle className="text-lg flex items-center gap-2 text-primary font-bold">
-                  <Layers className="h-5 w-5 text-rose-600 dark:text-rose-400" />
-                  Facilities & Services
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-3">
-                    <Label className="text-base font-semibold">Property Facilities</Label>
-                    <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4 bg-muted/30">
-                      {masterData?.facilities && masterData.facilities.length > 0 ? (
-                        masterData.facilities.map((facility: any) => (
-                          <div key={facility.id} className="flex items-center space-x-2">
-                            <input
-                              type="checkbox"
-                              id={`facility-${facility.id}`}
-                              checked={selectedFacilities.includes(facility.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedFacilities([...selectedFacilities, facility.id])
-                                } else {
-                                  setSelectedFacilities(selectedFacilities.filter(id => id !== facility.id))
-                                }
-                              }}
-                              disabled={createMutation.isPending || updateMutation.isPending}
-                              className="h-4 w-4 rounded border-gray-300"
-                            />
-                            <Label htmlFor={`facility-${facility.id}`} className="font-normal cursor-pointer">
-                              {facility.name_en} / {facility.name_ar}
-                            </Label>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No facilities available</p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <Label className="text-base font-semibold">Property Services</Label>
-                    <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-4 bg-muted/30">
-                      {masterData?.services && masterData.services.length > 0 ? (
-                        masterData.services.map((service: any) => (
-                          <div key={service.id} className="flex items-center space-x-2">
-                            <input
-                              type="checkbox"
-                              id={`service-${service.id}`}
-                              checked={selectedServices.includes(service.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedServices([...selectedServices, service.id])
-                                } else {
-                                  setSelectedServices(selectedServices.filter(id => id !== service.id))
-                                }
-                              }}
-                              disabled={createMutation.isPending || updateMutation.isPending}
-                              className="h-4 w-4 rounded border-gray-300"
-                            />
-                            <Label htmlFor={`service-${service.id}`} className="font-normal cursor-pointer">
-                              {service.name_en} / {service.name_ar}
-                            </Label>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No services available</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Property Images Upload */}
-            {editingProperty?.id && (
-              <Card className="border-2">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <ImageIcon className="h-5 w-5 text-primary" />
-                    Property Images
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <PropertyImageUpload
-                    propertyId={editingProperty.id}
-                    images={propertyImages}
-                    onImagesChange={setPropertyImages}
-                    disabled={createMutation.isPending || updateMutation.isPending}
-                  />
-                </CardContent>
-              </Card>
-            )}
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setIsDialogOpen(false)
-                  setEditingProperty(null)
-                  reset()
-                  setSelectedGovernorate('none')
-                  setSelectedArea('none')
-                  setSelectedStreet('none')
-                  setSelectedFacilities([])
-                  setSelectedServices([])
-                  setPropertyImages([])
-                  setDailyRentPricing([])
-                }}
-              >
-                {t('common.cancel')}
-              </Button>
-              <Button
-                type="submit"
-                disabled={createMutation.isPending || updateMutation.isPending}
-              >
-                {createMutation.isPending || updateMutation.isPending
-                  ? t('common.loading')
-                  : t('common.save')}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
