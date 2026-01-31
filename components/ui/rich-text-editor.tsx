@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useRef } from 'react'
+import React from 'react'
 import dynamic from 'next/dynamic'
 import { cn } from '@/lib/utils'
 
@@ -25,7 +25,6 @@ export function RichTextEditor({
   className,
   height = 300,
 }: RichTextEditorProps) {
-  const quillRef = useRef<any>(null)
 
   // Quill toolbar configuration
   const modules = {
@@ -159,7 +158,6 @@ export function RichTextEditor({
         }
       `}</style>
       <ReactQuill
-        ref={quillRef}
         theme="snow"
         value={value}
         onChange={onChange}

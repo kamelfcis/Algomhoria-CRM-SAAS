@@ -858,7 +858,8 @@ export default function PropertiesPage() {
   const [nextCode, setNextCode] = useState<string>('')
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
-  const [propertyImages, setPropertyImages] = useState<Array<{ id: string; url: string; is_primary?: boolean; order_index?: number }>>([])
+  type PropertyImageType = { id?: string; url: string; is_primary?: boolean; order_index?: number; file?: File; preview?: string }
+  const [propertyImages, setPropertyImages] = useState<PropertyImageType[]>([])
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards')
   const [propertyImageIndices, setPropertyImageIndices] = useState<{ [key: string]: number }>({})
   const [dailyRentPricing, setDailyRentPricing] = useState<DailyRentPricingItem[]>([])
@@ -3079,8 +3080,8 @@ export default function PropertiesPage() {
                 <CardContent>
                   <PropertyImageUpload
                     propertyId={editingProperty.id}
-                    images={propertyImages}
-                    onImagesChange={setPropertyImages}
+                    images={propertyImages as any}
+                    onImagesChange={(images) => setPropertyImages(images as PropertyImageType[])}
                     disabled={createMutation.isPending || updateMutation.isPending}
                   />
                 </CardContent>

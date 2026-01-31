@@ -822,19 +822,19 @@ function PropertyCard({ property, imageIndex, onImageIndexChange, imageCount, on
               <div className="space-y-1">
                 {(displayPrice.value as Array<{ label: string; value: number }>).map((price, idx) => (
                   <div key={idx} className="text-lg font-semibold text-primary">
-                    {price.label}: {formatPrice(price.value)}
+                    {price.label}: {formatPrice(price.value, false)}
                   </div>
                 ))}
               </div>
             ) : displayPrice.isRange ? (
               <div className="text-lg font-semibold text-primary">
                 {typeof displayPrice.value === 'object' && 'min' in displayPrice.value && 'max' in displayPrice.value
-                  ? `${formatPrice(displayPrice.value.min)} - ${formatPrice(displayPrice.value.max)}`
-                  : formatPrice(displayPrice.value as number)}
+                  ? `${formatPrice(displayPrice.value.min, false)} - ${formatPrice(displayPrice.value.max, false)}`
+                  : formatPrice(displayPrice.value as number, false)}
               </div>
             ) : (
               <div className="text-lg font-semibold text-primary">
-                {typeof displayPrice.value === 'number' ? formatPrice(displayPrice.value) : String(displayPrice.value || '')}
+                {typeof displayPrice.value === 'number' ? formatPrice(displayPrice.value, displayPrice.label === 'Price') : String(displayPrice.value || '')}
               </div>
             )}
             {displayPrice.label !== 'Price' && !displayPrice.isMultiple && (
@@ -877,7 +877,8 @@ export default function PropertiesPage() {
   const [nextCode, setNextCode] = useState<string>('')
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([])
   const [selectedServices, setSelectedServices] = useState<string[]>([])
-  const [propertyImages, setPropertyImages] = useState<Array<{ id: string; url: string; is_primary?: boolean; order_index?: number }>>([])
+  type PropertyImageType = { id?: string; url: string; is_primary?: boolean; order_index?: number; file?: File; preview?: string }
+  const [propertyImages, setPropertyImages] = useState<PropertyImageType[]>([])
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('cards')
   const [propertyImageIndices, setPropertyImageIndices] = useState<{ [key: string]: number }>({})
   const [dailyRentPricing, setDailyRentPricing] = useState<DailyRentPricingItem[]>([])
@@ -890,7 +891,8 @@ export default function PropertiesPage() {
   const convertEGPToUSD = (egpValue: number | null | undefined): number | null => {
     if (egpValue === null || egpValue === undefined || isNaN(egpValue)) return null
     if (currency === 'EGP' && dollarRate > 0) {
-      return egpValue / dollarRate
+      // Round to 2 decimal places to avoid floating point precision issues
+      return Math.round((egpValue / dollarRate) * 100) / 100
     }
     return egpValue
   }
@@ -899,7 +901,8 @@ export default function PropertiesPage() {
   const convertUSDToEGP = (usdValue: number | null | undefined): number | null => {
     if (usdValue === null || usdValue === undefined || isNaN(usdValue)) return null
     if (currency === 'EGP' && dollarRate > 0) {
-      return usdValue * dollarRate
+      // Round to 2 decimal places to avoid floating point precision issues
+      return Math.round((usdValue * dollarRate) * 100) / 100
     }
     return usdValue
   }
@@ -1006,6 +1009,59 @@ export default function PropertiesPage() {
   const createMutation = useMutation({
     mutationFn: createProperty,
     onSuccess: async (data: any) => {
+      const propertyId = data?.id
+      
+      // Upload pending images if property was created and there are images with files
+      if (propertyId && propertyImages.length > 0) {
+        const pendingImages = propertyImages.filter(img => img.file)
+        if (pendingImages.length > 0) {
+          try {
+            const supabase = createClient()
+            for (const image of pendingImages) {
+              if (!image.file) continue
+              
+              const fileExt = image.file.name.split('.').pop()
+              const fileName = `${propertyId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
+              
+              // Upload to Supabase Storage
+              const { error: uploadError } = await supabase.storage
+                .from('property-images')
+                .upload(fileName, image.file, {
+                  cacheControl: '3600',
+                  upsert: false,
+                })
+              
+              if (uploadError) {
+                console.error('Error uploading image:', uploadError)
+                continue
+              }
+              
+              // Get public URL
+              const { data: { publicUrl } } = supabase.storage
+                .from('property-images')
+                .getPublicUrl(fileName)
+              
+              // Insert into database
+              await supabase
+                .from('property_images')
+                .insert({
+                  property_id: propertyId,
+                  image_url: publicUrl,
+                  is_primary: image.is_primary || false,
+                  order_index: image.order_index || 0,
+                })
+              
+              // Revoke blob URL
+              if (image.preview) {
+                URL.revokeObjectURL(image.preview)
+              }
+            }
+          } catch (error) {
+            console.error('Error uploading property images:', error)
+          }
+        }
+      }
+      
       queryClient.invalidateQueries({ queryKey: ['properties'] })
       queryClient.invalidateQueries({ queryKey: ['all-property-images'] })
       
@@ -1023,8 +1079,8 @@ export default function PropertiesPage() {
       setSelectedServices([])
       
       // Log activity
-      if (data?.id) {
-        await ActivityLogger.create('property', data.id, data.title_en || data.title_ar || data.code || 'Untitled Property')
+      if (propertyId) {
+        await ActivityLogger.create('property', propertyId, data.title_en || data.title_ar || data.code || 'Untitled Property')
       }
       
       // Show success toast
@@ -1145,13 +1201,13 @@ export default function PropertiesPage() {
     const convertedDailyRentPricing = isDailyRent && currency === 'EGP' && dollarRate > 0
       ? dailyRentPricing.map(range => ({
           ...range,
-          monday: range.monday / dollarRate,
-          tuesday: range.tuesday / dollarRate,
-          wednesday: range.wednesday / dollarRate,
-          thursday: range.thursday / dollarRate,
-          friday: range.friday / dollarRate,
-          saturday: range.saturday / dollarRate,
-          sunday: range.sunday / dollarRate,
+          monday: Math.round((range.monday / dollarRate) * 100) / 100,
+          tuesday: Math.round((range.tuesday / dollarRate) * 100) / 100,
+          wednesday: Math.round((range.wednesday / dollarRate) * 100) / 100,
+          thursday: Math.round((range.thursday / dollarRate) * 100) / 100,
+          friday: Math.round((range.friday / dollarRate) * 100) / 100,
+          saturday: Math.round((range.saturday / dollarRate) * 100) / 100,
+          sunday: Math.round((range.sunday / dollarRate) * 100) / 100,
         }))
       : (isDailyRent ? dailyRentPricing : null)
     
@@ -1168,8 +1224,8 @@ export default function PropertiesPage() {
       property_type_id: data.property_type_id || null,
       daily_rent_pricing: convertedDailyRentPricing,
       price: convertEGPToUSD(data.price),
-      sale_price: (isSale || isSaleOrRent) ? convertEGPToUSD(data.sale_price) : null,
-      rent_price: (isRent || isSaleOrRent) ? convertEGPToUSD(data.rent_price) : null,
+      sale_price: (isSale || isSaleOrRent) ? data.sale_price : null,
+      rent_price: (isRent || isSaleOrRent) ? data.rent_price : null,
       facilityIds: selectedFacilities,
       serviceIds: selectedServices,
     }
@@ -1180,8 +1236,45 @@ export default function PropertiesPage() {
     }
   }
 
+  // Dedicated function to close the form (used by X and Cancel buttons)
+  const handleCloseForm = React.useCallback(() => {
+    setExpandedRowId(null)
+    setIsCreating(false)
+    reset()
+    setFormErrors({})
+    setSelectedGovernorate('none')
+    setSelectedArea('none')
+    setSelectedStreet('none')
+    setSelectedFacilities([])
+    setSelectedServices([])
+    setPropertyImages([])
+    setDailyRentPricing([])
+  }, [reset])
+
   const handleToggleExpand = React.useCallback(async (property: Property | null, scrollTo = false) => {
-    if (expandedRowId === property?.id) {
+    // If property is null, open form for creating new property
+    if (property === null) {
+      setExpandedRowId(null)
+      setIsCreating(true)
+      refetchMasterData()
+      // Reset form for new property
+      reset()
+      setFormErrors({})
+      setSelectedGovernorate('none')
+      setSelectedArea('none')
+      setSelectedStreet('none')
+      setSelectedFacilities([])
+      setSelectedServices([])
+      setPropertyImages([])
+      setDailyRentPricing([])
+      setValue('status', 'pending')
+      setValue('is_featured', false)
+      setValue('is_rented', false)
+      setValue('is_sold', false)
+      return
+    }
+
+    if (expandedRowId === property.id) {
       // Collapse
       setExpandedRowId(null)
       setIsCreating(false)
@@ -1195,156 +1288,157 @@ export default function PropertiesPage() {
       setPropertyImages([])
       setDailyRentPricing([])
     } else {
-      // Expand - fetch fresh data if editing
-      let propertyToEdit = property
-      if (property) {
-        try {
-          const supabase = createClient()
-          const { data: freshProperty, error } = await supabase
-            .from('properties')
-            .select('*')
-            .eq('id', property.id)
-            .single()
+      // Expand - fetch fresh data if editing (property is guaranteed to be non-null here)
+    let propertyToEdit = property
+    try {
+      const supabase = createClient()
+      const { data: freshProperty, error } = await supabase
+        .from('properties')
+        .select('*')
+        .eq('id', property.id)
+        .single()
 
-          if (error) {
-            console.error('Error fetching fresh property data:', error)
-          } else {
-            propertyToEdit = freshProperty as Property
-          }
-        } catch (error) {
-          console.error('Error fetching property:', error)
-        }
-        setExpandedRowId(property.id)
-        setIsCreating(false)
+      if (error) {
+        console.error('Error fetching fresh property data:', error)
       } else {
-        // Creating new property
-        setExpandedRowId(null)
-        setIsCreating(true)
-        refetchMasterData()
-        // Reset form for new property
-        reset()
-        setFormErrors({})
-        setSelectedGovernorate('none')
-        setSelectedArea('none')
-        setSelectedStreet('none')
-        setSelectedFacilities([])
-        setSelectedServices([])
-        setPropertyImages([])
-        setDailyRentPricing([])
-        setValue('status', 'pending')
-        setValue('is_featured', false)
-        setValue('is_rented', false)
-        setValue('is_sold', false)
-        return // Exit early for new property creation
+        propertyToEdit = freshProperty as Property
       }
-      
+    } catch (error) {
+      console.error('Error fetching property:', error)
+    }
+      setExpandedRowId(property.id)
+      setIsCreating(false)
+
       // Only execute the following code when editing (propertyToEdit exists)
       if (!propertyToEdit) return
       
-      // Refresh all dropdown lists
-      refetchMasterData()
-      // Code is read-only, so we don't set it in the form
-      setValue('title_ar', propertyToEdit.title_ar)
-      
-      // Load existing facilities and services
-      try {
-        const [facilityIds, serviceIds] = await Promise.all([
-          getPropertyFacilities(propertyToEdit.id),
-          getPropertyServices(propertyToEdit.id),
-        ])
-        setSelectedFacilities(facilityIds)
-        setSelectedServices(serviceIds)
-      } catch (error) {
-        console.error('Error loading property facilities/services:', error)
-        setSelectedFacilities([])
-        setSelectedServices([])
-      }
-      setValue('title_en', propertyToEdit.title_en)
-      setValue('description_ar', propertyToEdit.description_ar || '')
-      setValue('description_en', propertyToEdit.description_en || '')
-      setValue('address_ar', propertyToEdit.address_ar || '')
-      setValue('address_en', propertyToEdit.address_en || '')
-      setValue('location_text', propertyToEdit.location_text || '')
-      setValue('latitude', propertyToEdit.latitude || undefined)
-      setValue('longitude', propertyToEdit.longitude || undefined)
-      // Convert USD prices to EGP for display if currency is EGP
-      setValue('price', convertUSDToEGP(propertyToEdit.price) || undefined)
-      setValue('sale_price', convertUSDToEGP(propertyToEdit.sale_price) || undefined)
-      setValue('rent_price', convertUSDToEGP(propertyToEdit.rent_price) || undefined)
+    // Refresh all dropdown lists
+    refetchMasterData()
+    // Code is read-only, so we don't set it in the form
+    setValue('title_ar', propertyToEdit.title_ar)
+    
+    // Load existing facilities and services
+    try {
+      const [facilityIds, serviceIds] = await Promise.all([
+        getPropertyFacilities(propertyToEdit.id),
+        getPropertyServices(propertyToEdit.id),
+      ])
+      setSelectedFacilities(facilityIds)
+      setSelectedServices(serviceIds)
+    } catch (error) {
+      console.error('Error loading property facilities/services:', error)
+      setSelectedFacilities([])
+      setSelectedServices([])
+    }
+    setValue('title_en', propertyToEdit.title_en)
+    setValue('description_ar', propertyToEdit.description_ar || '')
+    setValue('description_en', propertyToEdit.description_en || '')
+    setValue('address_ar', propertyToEdit.address_ar || '')
+    setValue('address_en', propertyToEdit.address_en || '')
+    setValue('location_text', propertyToEdit.location_text || '')
+    setValue('latitude', propertyToEdit.latitude || undefined)
+    setValue('longitude', propertyToEdit.longitude || undefined)
+    // Convert USD prices to EGP for display if currency is EGP
+    setValue('price', convertUSDToEGP(propertyToEdit.price) || undefined)
+      setValue('sale_price', propertyToEdit.sale_price || undefined)
+      setValue('rent_price', propertyToEdit.rent_price || undefined)
       const rentalPeriod = propertyToEdit.rental_period
       if (rentalPeriod === 'monthly' || rentalPeriod === 'weekly' || rentalPeriod === 'yearly') {
         setValue('rental_period', rentalPeriod)
       } else {
         setValue('rental_period', undefined)
       }
-      
-      // Convert daily rent pricing from USD to EGP if currency is EGP
-      if (propertyToEdit.daily_rent_pricing && currency === 'EGP' && dollarRate > 0) {
+    
+    // Convert daily rent pricing from USD to EGP if currency is EGP
+    if (propertyToEdit.daily_rent_pricing && currency === 'EGP' && dollarRate > 0) {
+      try {
+        const pricing = Array.isArray(propertyToEdit.daily_rent_pricing)
+          ? propertyToEdit.daily_rent_pricing
+          : (typeof propertyToEdit.daily_rent_pricing === 'string' 
+              ? JSON.parse(propertyToEdit.daily_rent_pricing) 
+              : [])
+        
+        const convertedPricing = pricing.map((range: any) => ({
+          ...range,
+          monday: range.monday * dollarRate,
+          tuesday: range.tuesday * dollarRate,
+          wednesday: range.wednesday * dollarRate,
+          thursday: range.thursday * dollarRate,
+          friday: range.friday * dollarRate,
+          saturday: range.saturday * dollarRate,
+          sunday: range.sunday * dollarRate,
+        }))
+        setDailyRentPricing(convertedPricing)
+      } catch (e) {
+        console.error('Error loading daily_rent_pricing:', e)
+        setDailyRentPricing([])
+      }
+    } else {
+      // Load daily rent pricing (no conversion needed)
+      if (propertyToEdit.daily_rent_pricing) {
         try {
-          const pricing = Array.isArray(propertyToEdit.daily_rent_pricing)
-            ? propertyToEdit.daily_rent_pricing
-            : (typeof propertyToEdit.daily_rent_pricing === 'string' 
-                ? JSON.parse(propertyToEdit.daily_rent_pricing) 
-                : [])
-          
-          const convertedPricing = pricing.map((range: any) => ({
-            ...range,
-            monday: range.monday * dollarRate,
-            tuesday: range.tuesday * dollarRate,
-            wednesday: range.wednesday * dollarRate,
-            thursday: range.thursday * dollarRate,
-            friday: range.friday * dollarRate,
-            saturday: range.saturday * dollarRate,
-            sunday: range.sunday * dollarRate,
-          }))
-          setDailyRentPricing(convertedPricing)
+          const pricing = propertyToEdit.daily_rent_pricing
+          setDailyRentPricing(Array.isArray(pricing) ? pricing : [])
         } catch (e) {
           console.error('Error loading daily_rent_pricing:', e)
           setDailyRentPricing([])
         }
       } else {
-        // Load daily rent pricing (no conversion needed)
-        if (propertyToEdit.daily_rent_pricing) {
-          try {
-            const pricing = propertyToEdit.daily_rent_pricing
-            setDailyRentPricing(Array.isArray(pricing) ? pricing : [])
-          } catch (e) {
-            console.error('Error loading daily_rent_pricing:', e)
-            setDailyRentPricing([])
-          }
-        } else {
-          setDailyRentPricing([])
-        }
+        setDailyRentPricing([])
       }
-      setValue('size', propertyToEdit.size || undefined)
-      setValue('baths', propertyToEdit.baths || undefined)
-      setValue('floor_no', propertyToEdit.floor_no || undefined)
-      setValue('no_of_receptions', propertyToEdit.no_of_receptions || undefined)
-      setValue('no_of_rooms', propertyToEdit.no_of_rooms || undefined)
-      setValue('building_no', propertyToEdit.building_no || '')
-      setValue('apartment_no', propertyToEdit.apartment_no || '')
-      setValue('youtube_url', propertyToEdit.youtube_url || '')
-      setValue('property_note', propertyToEdit.property_note || '')
-      setValue('phone_number', propertyToEdit.phone_number || '')
-      setValue('status', propertyToEdit.status as any)
-      setValue('is_featured', propertyToEdit.is_featured || false)
-      setValue('is_rented', propertyToEdit.is_rented || false)
-      setValue('is_sold', propertyToEdit.is_sold || false)
-      setValue('rental_end_date', propertyToEdit.rental_end_date ? new Date(propertyToEdit.rental_end_date).toISOString().split('T')[0] : undefined)
-      setValue('property_type_id', propertyToEdit.property_type_id || undefined)
-      setValue('owner_id', propertyToEdit.owner_id || undefined)
-      setValue('section_id', propertyToEdit.section_id || undefined)
-      setValue('payment_method_id', propertyToEdit.payment_method_id || undefined)
-      setValue('view_type_id', propertyToEdit.view_type_id || undefined)
-      setValue('finishing_type_id', propertyToEdit.finishing_type_id || undefined)
-      setValue('governorate_id', propertyToEdit.governorate_id || undefined)
+    }
+    setValue('size', propertyToEdit.size || undefined)
+    setValue('baths', propertyToEdit.baths || undefined)
+    setValue('floor_no', propertyToEdit.floor_no || undefined)
+    setValue('no_of_receptions', propertyToEdit.no_of_receptions || undefined)
+    setValue('no_of_rooms', propertyToEdit.no_of_rooms || undefined)
+    setValue('building_no', propertyToEdit.building_no || '')
+    setValue('apartment_no', propertyToEdit.apartment_no || '')
+    setValue('youtube_url', propertyToEdit.youtube_url || '')
+    setValue('property_note', propertyToEdit.property_note || '')
+    setValue('phone_number', propertyToEdit.phone_number || '')
+    setValue('status', propertyToEdit.status as any)
+    setValue('is_featured', propertyToEdit.is_featured || false)
+    setValue('is_rented', propertyToEdit.is_rented || false)
+    setValue('is_sold', propertyToEdit.is_sold || false)
+    setValue('rental_end_date', propertyToEdit.rental_end_date ? new Date(propertyToEdit.rental_end_date).toISOString().split('T')[0] : undefined)
+    setValue('property_type_id', propertyToEdit.property_type_id || undefined)
+    setValue('owner_id', propertyToEdit.owner_id || undefined)
+    setValue('section_id', propertyToEdit.section_id || undefined)
+    setValue('payment_method_id', propertyToEdit.payment_method_id || undefined)
+    setValue('view_type_id', propertyToEdit.view_type_id || undefined)
+    setValue('finishing_type_id', propertyToEdit.finishing_type_id || undefined)
+    setValue('governorate_id', propertyToEdit.governorate_id || undefined)
+    
+      // Set governorate first
+      const governorateId = propertyToEdit.governorate_id || 'none'
+      setSelectedGovernorate(governorateId)
       
-      setSelectedGovernorate(propertyToEdit.governorate_id || 'none')
-      setSelectedArea(propertyToEdit.area_id || 'none')
-      setSelectedStreet(propertyToEdit.street_id || 'none')
-      // Load property images
+      // Set area after governorate is set (areas depend on governorate)
+      // Use setTimeout to ensure areas query is enabled and can load before setting area
+      setTimeout(() => {
+        if (propertyToEdit.area_id) {
+          setSelectedArea(propertyToEdit.area_id)
+          setValue('area_id', propertyToEdit.area_id)
+        } else {
+          setSelectedArea('none')
+          setValue('area_id', null)
+        }
+        
+        // Set street after area is set (streets depend on area)
+        setTimeout(() => {
+          if (propertyToEdit.street_id) {
+            setSelectedStreet(propertyToEdit.street_id)
+            setValue('street_id', propertyToEdit.street_id)
+          } else {
+            setSelectedStreet('none')
+            setValue('street_id', null)
+          }
+        }, 150)
+      }, 200)
+    // Load property images
       const images = await getPropertyImages(propertyToEdit.id)
-      setPropertyImages(images)
+    setPropertyImages(images)
       
       if (scrollTo) {
         setTimeout(() => {
@@ -1694,17 +1788,17 @@ export default function PropertiesPage() {
           <p className="text-muted-foreground">Manage real estate properties</p>
         </div>
         {canCreate && (
-          <Button 
-            onClick={() => {
+                <Button
+                  onClick={() => {
               handleToggleExpand(null)
             }}
             className="transition-all duration-300 hover:scale-105 hover:shadow-lg"
           >
             <Plus className="mr-2 h-4 w-4" />
             {t('properties.createProperty')}
-          </Button>
-        )}
-      </div>
+                </Button>
+              )}
+              </div>
 
       {/* Expandable Form Section - At the Top */}
       {(expandedRowId || isCreating) && (
@@ -1718,7 +1812,7 @@ export default function PropertiesPage() {
                 <div className="flex items-center gap-4">
                   <div className="p-2.5 rounded-lg bg-primary/10 border border-primary/20">
                     <Building2 className="h-5 w-5 text-primary" />
-                  </div>
+                </div>
                   <div>
                     <CardTitle className="text-xl font-semibold text-foreground tracking-tight">
                       {expandedRowId ? t('properties.editProperty') : t('properties.createProperty')}
@@ -1726,16 +1820,16 @@ export default function PropertiesPage() {
                     <p className="text-sm mt-1 text-muted-foreground font-normal">
                       {expandedRowId ? 'Update property information and settings' : 'Fill in the details to create a new property listing'}
                     </p>
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleToggleExpand(null)}
+            </div>
+            </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                  onClick={handleCloseForm}
                   className="h-8 w-8 rounded-md transition-all duration-200 hover:bg-muted"
-                >
+                  >
                   <X className="h-4 w-4" />
-                </Button>
+                  </Button>
               </div>
             </CardHeader>
             <CardContent className="p-8 overflow-x-hidden" style={{
@@ -1786,17 +1880,17 @@ export default function PropertiesPage() {
                     
                     setFormErrors(errorMessages)
                     
-                    // Scroll to first error field
-                    const firstErrorField = Object.keys(errors)[0]
-                    if (firstErrorField) {
-                      setTimeout(() => {
-                        const element = document.getElementById(firstErrorField)
-                        if (element) {
-                          element.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          element.focus()
-                        }
-                      }, 100)
+                // Scroll to first error field
+                const firstErrorField = Object.keys(errors)[0]
+                if (firstErrorField) {
+                  setTimeout(() => {
+                    const element = document.getElementById(firstErrorField)
+                    if (element) {
+                      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                      element.focus()
                     }
+                  }, 100)
+                }
                     
                     // Show toast with error summary
                     const missingFields = Object.keys(errorMessages).map(key => fieldLabels[key] || key).join(', ')
@@ -1806,10 +1900,10 @@ export default function PropertiesPage() {
                       variant: 'destructive',
                       duration: 5000,
                     })
-                  }
-                )} 
-                className="space-y-6"
-              >
+              }
+            )} 
+            className="space-y-6"
+          >
                 {/* Validation Errors Alert */}
                 {Object.keys(formErrors).length > 0 && (
                   <div className="bg-destructive/10 border-2 border-destructive rounded-lg p-4 mb-4">
@@ -1867,59 +1961,59 @@ export default function PropertiesPage() {
                     </div>
                   </div>
                 )}
-                {/* Basic Information */}
+            {/* Basic Information */}
                 <Card className="border border-border/50 bg-card shadow-sm">
                   <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
                     <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
-                      Basic Information
-                    </CardTitle>
-                  </CardHeader>
+                  Basic Information
+                </CardTitle>
+              </CardHeader>
                   <CardContent className="pt-6 space-y-5">
                     <div className="grid grid-cols-2 gap-6">
                       <div className="space-y-2.5">
                         <Label htmlFor="code" className="text-sm font-medium text-foreground">
                           {t('properties.code')} <span className="text-xs font-normal text-muted-foreground">(Auto-generated)</span>
-                        </Label>
-                        <Input
-                          id="code"
+                    </Label>
+                    <Input
+                      id="code"
                           value={expandedRowId ? (properties?.find(p => p.id === expandedRowId)?.code || '-') : (nextCode || 'Calculating...')}
-                          disabled={true}
+                      disabled={true}
                           className="bg-muted/50 border-border/50 text-foreground font-medium cursor-not-allowed"
-                          readOnly
-                        />
+                      readOnly
+                    />
                         <p className="text-xs text-muted-foreground font-normal">
                           {expandedRowId 
-                            ? 'Code cannot be changed after creation' 
-                            : `Next code that will be assigned: ${nextCode || 'Calculating...'}`}
-                        </p>
-                      </div>
+                        ? 'Code cannot be changed after creation' 
+                        : `Next code that will be assigned: ${nextCode || 'Calculating...'}`}
+                    </p>
+                  </div>
 
                       <div className="space-y-2.5">
                         <Label htmlFor="status" className="text-sm font-medium text-foreground">{t('properties.status')}</Label>
-                        <Select
-                          onValueChange={(value) => setValue('status', value as any)}
-                          value={selectedStatus || 'pending'}
-                          disabled={createMutation.isPending || updateMutation.isPending}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
-                            <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
-                            <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
-                            <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
-                            <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
-                            <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
-                            <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
-                            <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                    <Select
+                      onValueChange={(value) => setValue('status', value as any)}
+                      value={selectedStatus || 'pending'}
+                      disabled={createMutation.isPending || updateMutation.isPending}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
+                        <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
+                        <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
+                        <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
+                        <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
+                        <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
+                        <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
+                        <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Property Details */}
             <Card className="border border-border/50 bg-card shadow-sm">
@@ -2728,7 +2822,7 @@ export default function PropertiesPage() {
             </Card>
 
             {/* Property Images Upload */}
-            {expandedRowId && (
+            {(expandedRowId || isCreating) && (
               <Card className="border border-border/50 bg-card shadow-sm">
                 <CardHeader className="pb-4 border-b border-border/50 bg-muted/30">
                   <CardTitle className="text-base font-semibold text-foreground flex items-center gap-2.5">
@@ -2739,8 +2833,8 @@ export default function PropertiesPage() {
                 <CardContent className="pt-6">
                   <PropertyImageUpload
                     propertyId={expandedRowId}
-                    images={propertyImages}
-                    onImagesChange={setPropertyImages}
+                    images={propertyImages as any}
+                    onImagesChange={(images) => setPropertyImages(images as PropertyImageType[])}
                     disabled={createMutation.isPending || updateMutation.isPending}
                   />
                 </CardContent>
@@ -2751,9 +2845,7 @@ export default function PropertiesPage() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => {
-                  handleToggleExpand(null)
-                }}
+                onClick={handleCloseForm}
                 className="min-w-[100px] transition-all duration-200 hover:bg-muted"
               >
                 {t('common.cancel')}

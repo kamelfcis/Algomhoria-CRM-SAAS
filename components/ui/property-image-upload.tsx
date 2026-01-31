@@ -8,10 +8,12 @@ import { cn } from '@/lib/utils'
 import Image from 'next/image'
 
 interface PropertyImage {
-  id: string
+  id?: string
   url: string
   is_primary?: boolean
   order_index?: number
+  file?: File
+  preview?: string
 }
 
 interface PropertyImageUploadProps {
@@ -35,8 +37,30 @@ export function PropertyImageUpload({
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
-    if (!files || files.length === 0 || !propertyId) return
+    if (!files || files.length === 0) return
 
+    // If no propertyId, create preview images with blob URLs (for creation mode)
+    if (!propertyId) {
+      const newImages: PropertyImage[] = []
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        const preview = URL.createObjectURL(file)
+        newImages.push({
+          url: preview,
+          preview: preview,
+          file: file,
+          is_primary: images.length === 0 && i === 0,
+          order_index: images.length + i,
+        })
+      }
+      onImagesChange([...images, ...newImages])
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+      return
+    }
+
+    // If propertyId exists, upload immediately (for edit mode)
     const supabase = createClient()
     const newImages: PropertyImage[] = []
 
@@ -109,8 +133,19 @@ export function PropertyImageUpload({
     }
   }
 
-  const handleRemoveImage = async (imageId: string, imageUrl: string) => {
-    if (!propertyId) return
+  const handleRemoveImage = async (imageId: string | undefined, imageUrl: string) => {
+    // If no propertyId, just remove from local state (for creation mode)
+    if (!propertyId) {
+      const imageToRemove = images.find(img => img.url === imageUrl)
+      if (imageToRemove?.preview) {
+        URL.revokeObjectURL(imageToRemove.preview)
+      }
+      onImagesChange(images.filter((img) => img.url !== imageUrl))
+      return
+    }
+
+    // If propertyId exists, delete from storage and database (for edit mode)
+    if (!imageId) return
 
     const supabase = createClient()
 
@@ -182,8 +217,20 @@ export function PropertyImageUpload({
     }
   }
 
-  const handleSetPrimary = async (imageId: string) => {
-    if (!propertyId) return
+  const handleSetPrimary = async (imageId: string | undefined, imageUrl: string) => {
+    // If no propertyId, just update local state (for creation mode)
+    if (!propertyId) {
+      onImagesChange(
+        images.map((img) => ({
+          ...img,
+          is_primary: img.url === imageUrl,
+        }))
+      )
+      return
+    }
+
+    // If propertyId exists, update in database (for edit mode)
+    if (!imageId) return
 
     const supabase = createClient()
 
@@ -222,7 +269,7 @@ export function PropertyImageUpload({
           multiple
           accept="image/*"
           onChange={handleFileSelect}
-          disabled={disabled || uploading || !propertyId}
+          disabled={disabled || uploading}
           className="hidden"
           id="property-image-upload"
         />
@@ -231,7 +278,7 @@ export function PropertyImageUpload({
           variant="outline"
           size="sm"
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || uploading || !propertyId}
+          disabled={disabled || uploading}
         >
           {uploading ? (
             <>
@@ -253,19 +300,20 @@ export function PropertyImageUpload({
             .sort((a, b) => (a.order_index || 0) - (b.order_index || 0))
             .map((image) => (
               <div
-                key={image.id}
+                key={image.id || image.url}
                 className={cn(
                   'relative group aspect-video rounded-lg overflow-hidden border-2',
                   image.is_primary ? 'border-gold ring-2 ring-gold/20' : 'border-border'
                 )}
               >
                 <Image
-                  src={image.url}
+                  src={image.preview || image.url}
                   alt="Property"
                   fill
                   className="object-cover"
                   sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
                   loading="lazy"
+                  unoptimized={!!image.preview}
                 />
                 {image.is_primary && (
                   <div className="absolute top-2 left-2 bg-gold text-white text-xs font-bold px-2 py-1 rounded">
@@ -278,7 +326,7 @@ export function PropertyImageUpload({
                       type="button"
                       variant="secondary"
                       size="sm"
-                      onClick={() => handleSetPrimary(image.id)}
+                      onClick={() => handleSetPrimary(image.id, image.url)}
                       disabled={disabled || uploading}
                     >
                       Set Primary
@@ -299,12 +347,6 @@ export function PropertyImageUpload({
         </div>
       )}
 
-      {!propertyId && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground p-4 border rounded-lg bg-muted/50">
-          <ImageIcon className="h-4 w-4" />
-          <span>Save the property first to upload images</span>
-        </div>
-      )}
     </div>
   )
 }
