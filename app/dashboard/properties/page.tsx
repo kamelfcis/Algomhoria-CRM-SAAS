@@ -74,10 +74,34 @@ const propertySchema = z.object({
   owner_id: z.string().uuid().optional().nullable(),
   section_id: z.string().uuid().optional().nullable(),
   property_type_id: z.string().uuid().optional().nullable(),
-  price: z.number().optional().nullable(),
+  price: z.preprocess(
+    (val) => {
+      if (val === '' || val === null || val === undefined || (typeof val === 'number' && isNaN(val))) {
+        return null
+      }
+      return typeof val === 'string' ? parseFloat(val) : val
+    },
+    z.number().nullable().optional()
+  ),
   daily_rent_pricing: z.array(dailyRentPricingItemSchema).optional().nullable(),
-  sale_price: z.number().optional().nullable(),
-  rent_price: z.number().optional().nullable(),
+  sale_price: z.preprocess(
+    (val) => {
+      if (val === '' || val === null || val === undefined || (typeof val === 'number' && isNaN(val))) {
+        return null
+      }
+      return typeof val === 'string' ? parseFloat(val) : val
+    },
+    z.number().nullable().optional()
+  ),
+  rent_price: z.preprocess(
+    (val) => {
+      if (val === '' || val === null || val === undefined || (typeof val === 'number' && isNaN(val))) {
+        return null
+      }
+      return typeof val === 'string' ? parseFloat(val) : val
+    },
+    z.number().nullable().optional()
+  ),
   rental_period: z.enum(['monthly', 'weekly', 'yearly']).optional().nullable(),
   payment_method_id: z.string().uuid().optional().nullable(),
   size: z.number().optional().nullable(),
@@ -983,19 +1007,39 @@ export default function PropertiesPage() {
     mutationFn: createProperty,
     onSuccess: async (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['properties'] })
-      setIsCreating(false)
+      queryClient.invalidateQueries({ queryKey: ['all-property-images'] })
+      
+      // Close form and reset
       setExpandedRowId(null)
+      setIsCreating(false)
+      reset()
+      setFormErrors({})
+      setPropertyImages([])
+      setDailyRentPricing([])
+      setSelectedGovernorate('none')
+      setSelectedArea('none')
+      setSelectedStreet('none')
+      setSelectedFacilities([])
+      setSelectedServices([])
+      
       // Log activity
       if (data?.id) {
         await ActivityLogger.create('property', data.id, data.title_en || data.title_ar || data.code || 'Untitled Property')
-        // Set expanded row to enable image upload
-        setExpandedRowId(data.id)
-        setIsCreating(false)
-        // Load images (will be empty for new property)
-        const images = await getPropertyImages(data.id)
-        setPropertyImages(images)
       }
-      // Keep form open to allow user to upload images
+      
+      // Show success toast
+      toast({
+        title: t('common.success') || 'Success',
+        description: t('properties.createdSuccessfully') || 'Property has been created successfully',
+        variant: 'success',
+      })
+    },
+    onError: (error: any) => {
+      toast({
+        title: t('common.error') || 'Error',
+        description: error.message || t('properties.createError') || 'Failed to create property. Please try again.',
+        variant: 'destructive',
+      })
     },
   })
 
