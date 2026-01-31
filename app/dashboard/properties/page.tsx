@@ -11,6 +11,7 @@ import { DataTable } from '@/components/tables/data-table'
 import { Plus, Pencil, Trash2, Image as ImageIcon, Grid3x3, List, ChevronLeft, ChevronRight, Building2, MapPin, DollarSign, Settings, Star, Calendar, Phone, Home, Users, CreditCard, Eye, Paintbrush, Layers, Filter, ChevronDown, ChevronUp, X, Youtube, FileText } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
 import { usePermissions } from '@/hooks/use-permissions'
+import { ROLES } from '@/lib/constants'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -240,7 +241,7 @@ async function getMasterData() {
   ] = await Promise.all([
     supabase.from('governorates').select('id, name_ar, name_en').eq('status', 'active').order('order_index'),
     supabase.from('property_types').select('id, name_ar, name_en').eq('status', 'active'),
-    supabase.from('property_owners').select('id, name, email').eq('status', 'active').order('name'),
+    supabase.from('property_owners').select('id, name, phone_number').eq('status', 'active').order('name'),
     supabase.from('sections').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
     supabase.from('payment_methods').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
     supabase.from('property_view_types').select('id, name_ar, name_en').eq('status', 'active').order('name_en'),
@@ -1211,8 +1212,12 @@ export default function PropertiesPage() {
         }))
       : (isDailyRent ? dailyRentPricing : null)
     
+    // Force status to 'pending' for non-admin users
+    const status = profile?.role === ROLES.ADMIN ? data.status : 'pending'
+    
     const submitData = {
       ...data,
+      status,
       governorate_id: selectedGovernorate === 'none' ? null : selectedGovernorate,
       area_id: selectedArea === 'none' ? null : selectedArea,
       street_id: selectedStreet === 'none' ? null : selectedStreet,
@@ -2001,13 +2006,17 @@ export default function PropertiesPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="pending">{t('common.pending') || 'Pending'}</SelectItem>
-                        <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
-                        <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
-                        <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
-                        <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
-                        <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
-                        <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
-                        <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
+                        {profile?.role === ROLES.ADMIN && (
+                          <>
+                            <SelectItem value="active">{t('common.active') || 'Active'}</SelectItem>
+                            <SelectItem value="inactive">{t('common.inactive') || 'Inactive'}</SelectItem>
+                            <SelectItem value="rejected">{t('common.rejected') || 'Rejected'}</SelectItem>
+                            <SelectItem value="deleted">{t('common.deleted') || 'Deleted'}</SelectItem>
+                            <SelectItem value="expired">{t('common.expired') || 'Expired'}</SelectItem>
+                            <SelectItem value="rented">{t('common.rented') || 'Rented'}</SelectItem>
+                            <SelectItem value="sold">{t('common.sold') || 'Sold'}</SelectItem>
+                          </>
+                        )}
                       </SelectContent>
                     </Select>
                   </div>
@@ -2396,7 +2405,7 @@ export default function PropertiesPage() {
                         { value: 'none', label: 'No Owner' },
                         ...(masterData?.propertyOwners.map((owner: any) => ({
                           value: owner.id,
-                          label: `${owner.name}${owner.email ? ` (${owner.email})` : ''}`,
+                          label: `${owner.name}${owner.phone_number ? ` (${owner.phone_number})` : ''}`,
                         })) || []),
                       ]}
                     />
@@ -3055,7 +3064,7 @@ export default function PropertiesPage() {
                     { value: 'all', label: 'All Owners' },
                     ...(masterData?.propertyOwners.map((owner: any) => ({
                       value: owner.id,
-                      label: `${owner.name}${owner.email ? ` (${owner.email})` : ''}`,
+                      label: `${owner.name}${owner.phone_number ? ` (${owner.phone_number})` : ''}`,
                     })) || []),
                   ]}
                 />
