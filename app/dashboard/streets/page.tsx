@@ -77,13 +77,31 @@ interface Street {
 
 async function getStreets() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('streets')
-    .select('*, areas(name_ar, name_en, governorates(name_ar, name_en))')
-    .order('order_index', { ascending: true })
+  const allStreets: any[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  return data as any[]
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('streets')
+      .select('*, areas(name_ar, name_en, governorates(name_ar, name_en))')
+      .order('order_index', { ascending: true })
+      .range(offset, offset + batchSize - 1)
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allStreets.push(...data)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allStreets
 }
 
 async function getAreas() {

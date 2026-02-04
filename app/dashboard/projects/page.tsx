@@ -93,36 +93,55 @@ interface Project {
 
 async function getProjects() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*, project_categories(title_ar, title_en), governorates(id, name_ar, name_en), areas(id, name_ar, name_en)')
-    .order('order_index', { ascending: true })
+  const allProjects: any[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  
-  // Parse JSON columns
-  return (data || []).map((project: any) => {
-    let images = null
-    let youtube_videos = null
-    let metadata = null
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*, project_categories(title_ar, title_en), governorates(id, name_ar, name_en), areas(id, name_ar, name_en)')
+      .order('order_index', { ascending: true })
+      .range(offset, offset + batchSize - 1)
 
-    if (project.images) {
-      images = typeof project.images === 'string' ? JSON.parse(project.images) : project.images
-    }
-    if (project.youtube_videos) {
-      youtube_videos = typeof project.youtube_videos === 'string' ? JSON.parse(project.youtube_videos) : project.youtube_videos
-    }
-    if (project.metadata) {
-      metadata = typeof project.metadata === 'string' ? JSON.parse(project.metadata) : project.metadata
-    }
+    if (error) throw error
 
-    return {
-      ...project,
-      images,
-      youtube_videos,
-      metadata,
+    if (data && data.length > 0) {
+      // Parse JSON columns for this batch
+      const parsedBatch = data.map((project: any) => {
+        let images = null
+        let youtube_videos = null
+        let metadata = null
+
+        if (project.images) {
+          images = typeof project.images === 'string' ? JSON.parse(project.images) : project.images
+        }
+        if (project.youtube_videos) {
+          youtube_videos = typeof project.youtube_videos === 'string' ? JSON.parse(project.youtube_videos) : project.youtube_videos
+        }
+        if (project.metadata) {
+          metadata = typeof project.metadata === 'string' ? JSON.parse(project.metadata) : project.metadata
+        }
+
+        return {
+          ...project,
+          images,
+          youtube_videos,
+          metadata,
+        }
+      })
+      
+      allProjects.push(...parsedBatch)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
     }
-  }) as any[]
+  }
+
+  return allProjects
 }
 
 async function getProjectCategories() {

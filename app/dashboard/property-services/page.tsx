@@ -64,13 +64,31 @@ interface PropertyService {
 
 async function getServices() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('property_services')
-    .select('*')
-    .order('created_at', { ascending: false })
+  const allServices: PropertyService[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  return data as PropertyService[]
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('property_services')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + batchSize - 1)
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allServices.push(...data)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allServices
 }
 
 async function checkNameExists(nameEn: string, nameAr: string, excludeId?: string): Promise<boolean> {

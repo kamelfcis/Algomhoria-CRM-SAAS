@@ -186,15 +186,7 @@ async function updatePropertyOwner(id: string, ownerData: Partial<PropertyOwnerF
     }
   }
 
-  // Check for duplicate email if email is being updated
-  if (ownerData.email !== undefined) {
-    if (ownerData.email && ownerData.email.trim() !== '') {
-      const emailExists = await checkEmailExists(ownerData.email, id)
-      if (emailExists) {
-        throw new Error('Email address already exists. Please use a different email address.')
-      }
-    }
-  }
+  // Note: Email duplicate check removed - duplicate emails are allowed
 
   const supabase = createClient()
   const { data, error } = await supabase
@@ -211,21 +203,12 @@ async function updatePropertyOwner(id: string, ownerData: Partial<PropertyOwnerF
     const errorDetails = error.details || ''
     
     // Check for unique constraint violations (PostgreSQL error code 23505)
-    // Also check for constraint name in message
     if (errorCode === '23505' || 
         errorMessage.includes('duplicate key') || 
         errorMessage.includes('unique constraint') ||
-        errorMessage.includes('property_owners_email_key') ||
         errorMessage.includes('property_owners_phone_number_key') ||
-        errorDetails.includes('email') ||
         errorDetails.includes('phone_number')) {
       
-      // Check for email constraint
-      if (errorMessage.includes('email') || 
-          errorMessage.includes('property_owners_email_key') ||
-          errorDetails.includes('email')) {
-        throw new Error('Email address already exists. Please use a different email address.')
-      }
       // Check for phone number constraint
       if (errorMessage.includes('phone_number') || 
           errorMessage.includes('property_owners_phone_number_key') ||
@@ -370,7 +353,6 @@ export default function PropertyOwnersPage() {
     },
     onError: (error: any) => {
       const errorMsg = String(error?.message || '')
-      const errorCode = String(error?.code || '')
       
       // Check if it's a duplicate phone number error
       const isDuplicatePhone = errorMsg.includes('Phone number already exists') || 
@@ -378,19 +360,10 @@ export default function PropertyOwnersPage() {
                                 errorMsg.includes('property_owners_phone_number_key') ||
                                 (errorMsg.includes('duplicate key') && errorMsg.includes('phone'))
       
-      // Check if it's a duplicate email error
-      const isDuplicateEmail = errorMsg.includes('Email address already exists') || 
-                                errorMsg.includes('email address already exists') ||
-                                errorMsg.includes('property_owners_email_key') ||
-                                (errorMsg.includes('duplicate key') && errorMsg.includes('email')) ||
-                                (errorCode === '23505' && errorMsg.includes('email'))
-      
       let errorMessage = errorMsg || t('propertyOwners.updateError') || 'Failed to update property owner. Please try again.'
       
       if (isDuplicatePhone) {
         errorMessage = t('propertyOwners.phoneDuplicateError') || 'Phone number already exists. Please use a different phone number.'
-      } else if (isDuplicateEmail) {
-        errorMessage = t('propertyOwners.emailDuplicateError') || 'Email address already exists. Please use a different email address.'
       }
       
       toast({

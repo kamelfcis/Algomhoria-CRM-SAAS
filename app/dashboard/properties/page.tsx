@@ -193,14 +193,31 @@ async function getPropertyImages(propertyId: string) {
 
 async function getProperties() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('properties')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(1000) // Limit to prevent memory issues with large datasets
+  const allProperties: Property[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  return data as Property[]
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('properties')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + batchSize - 1)
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allProperties.push(...data)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allProperties
 }
 
 async function getPropertyFacilities(propertyId: string) {

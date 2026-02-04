@@ -64,13 +64,31 @@ interface PropertyFinishingType {
 
 async function getFinishingTypes() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('property_finishing_types')
-    .select('*')
-    .order('created_at', { ascending: false })
+  const allFinishingTypes: PropertyFinishingType[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  return data as PropertyFinishingType[]
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('property_finishing_types')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + batchSize - 1)
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allFinishingTypes.push(...data)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allFinishingTypes
 }
 
 async function checkNameExists(nameEn: string, nameAr: string, excludeId?: string): Promise<boolean> {

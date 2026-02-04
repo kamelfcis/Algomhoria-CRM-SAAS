@@ -73,13 +73,31 @@ interface Area {
 
 async function getAreas() {
   const supabase = createClient()
-  const { data, error } = await supabase
-    .from('areas')
-    .select('*, governorates(name_ar, name_en)')
-    .order('order_index', { ascending: true })
+  const allAreas: any[] = []
+  const batchSize = 1000
+  let offset = 0
+  let hasMore = true
 
-  if (error) throw error
-  return data as any[]
+  while (hasMore) {
+    const { data, error } = await supabase
+      .from('areas')
+      .select('*, governorates(name_ar, name_en)')
+      .order('order_index', { ascending: true })
+      .range(offset, offset + batchSize - 1)
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allAreas.push(...data)
+      offset += batchSize
+      // If we got fewer records than batchSize, we've reached the end
+      hasMore = data.length === batchSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allAreas
 }
 
 async function getGovernorates() {
