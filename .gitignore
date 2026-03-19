@@ -71,3 +71,5 @@ lib/.next/
 
 # Documentation files (optional - keep if needed)
 # *.md
+
+.vercel

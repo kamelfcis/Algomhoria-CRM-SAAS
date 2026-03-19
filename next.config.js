@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
-const useStandaloneOutput = process.env.NEXT_OUTPUT_MODE === 'standalone'
+const useStandaloneOutput =
+  process.env.NEXT_OUTPUT_MODE === 'standalone' && process.env.VERCEL !== '1'
 
 const nextConfig = {
   reactStrictMode: true,
