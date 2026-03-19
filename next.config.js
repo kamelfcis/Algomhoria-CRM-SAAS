@@ -1,7 +1,9 @@
 /** @type {import('next').NextConfig} */
+const useStandaloneOutput = process.env.NEXT_OUTPUT_MODE === 'standalone'
+
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone', // Enable standalone output for easier IIS deployment
+  output: useStandaloneOutput ? 'standalone' : undefined,
   
   // Enable compression for better performance
   compress: true,

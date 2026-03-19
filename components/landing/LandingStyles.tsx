@@ -43,39 +43,10 @@ export function LandingStyles() {
     addLink('preconnect', 'https://cdn.jsdelivr.net')
 
     // CRITICAL: Bootstrap CSS must load first (insert at beginning)
-    const bootstrapLink = addLink('stylesheet', '/landing/css/bootstrap.min.css')
+    addLink('stylesheet', '/landing/css/bootstrap.min.css')
     
     // Template CSS (loads after Bootstrap)
     addLink('stylesheet', '/landing/css/style.css')
-    
-    // Temporary fix CSS for navbar visibility (inline to ensure it loads)
-    const fixStyle = document.createElement('style')
-    fixStyle.textContent = `
-      @media (min-width: 992px) {
-        .navbar-collapse {
-          display: flex !important;
-          flex-basis: auto;
-          flex-grow: 1;
-          align-items: center;
-        }
-      }
-      .navbar-nav {
-        display: flex;
-        flex-direction: row;
-        list-style: none;
-        margin: 0;
-        padding: 0;
-      }
-      .nav-item {
-        display: list-item;
-      }
-      .nav-link {
-        display: block;
-        padding: 0.5rem 1rem;
-        text-decoration: none;
-      }
-    `
-    document.head.appendChild(fixStyle)
     
     // Library styles
     addLink('stylesheet', '/landing/lib/animate/animate.min.css')
@@ -94,18 +65,6 @@ export function LandingStyles() {
     
     addLink('stylesheet', 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.4.1/font/bootstrap-icons.css')
     
-    // Ensure Bootstrap loads by checking after a delay
-    setTimeout(() => {
-      const bootstrap = document.querySelector('link[href="/landing/css/bootstrap.min.css"]')
-      if (!bootstrap || !(bootstrap as HTMLLinkElement).sheet) {
-        console.warn('Bootstrap CSS not loaded, retrying...')
-        // Force reload
-        const newLink = document.createElement('link')
-        newLink.rel = 'stylesheet'
-        newLink.href = '/landing/css/bootstrap.min.css'
-        document.head.insertBefore(newLink, document.head.firstChild)
-      }
-    }, 100)
   }, [])
 
   return null

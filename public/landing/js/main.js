@@ -26,20 +26,22 @@
     });
 
 
-    // Hero Header carousel
-    $(".header-carousel").owlCarousel({
-        animateOut: 'slideOutDown',
-        items: 1,
-        autoplay: true,
-        smartSpeed: 500,
-        dots: false,
-        loop: true,
-        nav : true,
-        navText : [
-            '<i class="bi bi-arrow-left"></i>',
-            '<i class="bi bi-arrow-down"></i>'
-        ],
-    });
+    // Hero Header carousel (guarded for pages that don't load Owl)
+    if ($.fn && $.fn.owlCarousel && $(".header-carousel").length) {
+        $(".header-carousel").owlCarousel({
+            animateOut: 'slideOutDown',
+            items: 1,
+            autoplay: true,
+            smartSpeed: 500,
+            dots: false,
+            loop: true,
+            nav: true,
+            navText: [
+                '<i class="bi bi-arrow-left"></i>',
+                '<i class="bi bi-arrow-down"></i>'
+            ],
+        });
+    }
 
 
     // Facts counter

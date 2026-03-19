@@ -1,23 +1,39 @@
+'use client'
+
 import Image from 'next/image'
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 export default function BlogPage() {
+  const [locale, setLocale] = useState<'ar' | 'en'>('en')
+  useEffect(() => {
+    const nextLocale =
+      document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('locale='))
+        ?.split('=')[1] === 'ar'
+        ? 'ar'
+        : 'en'
+    setLocale(nextLocale)
+  }, [])
+  const isArabic = locale === 'ar'
+
   return (
     <>
       {/* Header Start */}
       <div className="container-fluid bg-breadcrumb">
         <div className="container text-center py-5" style={{ maxWidth: '900px' }}>
           <h4 className="text-white display-4 mb-4 wow fadeInDown" data-wow-delay="0.1s">
-            Our Blog
+            {isArabic ? 'المدونة' : 'Our Blog'}
           </h4>
           <ol className="breadcrumb d-flex justify-content-center mb-0 wow fadeInDown" data-wow-delay="0.3s">
             <li className="breadcrumb-item">
-              <Link href="/">Home</Link>
+              <Link href="/">{isArabic ? 'الرئيسية' : 'Home'}</Link>
             </li>
             <li className="breadcrumb-item">
-              <Link href="#">Pages</Link>
+              <Link href="#">{isArabic ? 'الصفحات' : 'Pages'}</Link>
             </li>
-            <li className="breadcrumb-item active text-primary">Blog</li>
+            <li className="breadcrumb-item active text-primary">{isArabic ? 'المدونة' : 'Blog'}</li>
           </ol>
         </div>
       </div>
@@ -31,10 +47,12 @@ export default function BlogPage() {
             data-wow-delay="0.2s"
             style={{ maxWidth: '800px' }}
           >
-            <h4 className="text-primary">Our Blog</h4>
-            <h1 className="display-5 mb-4">Latest News & Articles</h1>
+            <h4 className="text-primary">{isArabic ? 'مدونة الجمهورية' : 'Our Blog'}</h4>
+            <h1 className="display-5 mb-4">{isArabic ? 'احدث الاخبار والمقالات' : 'Latest News & Articles'}</h1>
             <p className="mb-0">
-              Stay updated with the latest real estate news, tips, and market insights.
+              {isArabic
+                ? 'تابع اخر اخبار العقارات والنصائح وتحليلات السوق.'
+                : 'Stay updated with the latest real estate news, tips, and market insights.'}
             </p>
           </div>
           <div className="row g-4">
@@ -50,20 +68,22 @@ export default function BlogPage() {
                       height={250}
                     />
                   </Link>
-                  <div className="blog-category py-2 px-4">Real Estate</div>
+                  <div className="blog-category py-2 px-4">{isArabic ? 'عقارات' : 'Real Estate'}</div>
                   <div className="blog-date">
                     <i className="fas fa-clock me-2"></i>January 2025
                   </div>
                 </div>
                 <div className="blog-content p-4">
                   <Link href="/blog" className="h4 d-inline-block mb-4">
-                    Tips for First-Time Home Buyers
+                    {isArabic ? 'نصائح للمشترين لاول مرة' : 'Tips for First-Time Home Buyers'}
                   </Link>
                   <p className="mb-4">
-                    Essential tips and advice for first-time home buyers to make the right decision...
+                    {isArabic
+                      ? 'نصائح اساسية لمشتري العقار لاول مرة لاتخاذ القرار الصحيح...'
+                      : 'Essential tips and advice for first-time home buyers to make the right decision...'}
                   </p>
                   <Link href="/blog" className="btn btn-primary rounded-pill py-2 px-4">
-                    Read More <i className="fas fa-arrow-right ms-2"></i>
+                    {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fas fa-arrow-right ms-2"></i>
                   </Link>
                 </div>
               </div>
@@ -80,20 +100,22 @@ export default function BlogPage() {
                       height={250}
                     />
                   </Link>
-                  <div className="blog-category py-2 px-4">Market Insights</div>
+                  <div className="blog-category py-2 px-4">{isArabic ? 'تحليلات السوق' : 'Market Insights'}</div>
                   <div className="blog-date">
                     <i className="fas fa-clock me-2"></i>January 2025
                   </div>
                 </div>
                 <div className="blog-content p-4">
                   <Link href="/blog" className="h4 d-inline-block mb-4">
-                    Real Estate Market Trends 2025
+                    {isArabic ? 'اتجاهات سوق العقارات 2025' : 'Real Estate Market Trends 2025'}
                   </Link>
                   <p className="mb-4">
-                    Explore the latest trends and predictions for the real estate market in 2025...
+                    {isArabic
+                      ? 'تعرف على احدث الاتجاهات والتوقعات لسوق العقارات في 2025...'
+                      : 'Explore the latest trends and predictions for the real estate market in 2025...'}
                   </p>
                   <Link href="/blog" className="btn btn-primary rounded-pill py-2 px-4">
-                    Read More <i className="fas fa-arrow-right ms-2"></i>
+                    {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fas fa-arrow-right ms-2"></i>
                   </Link>
                 </div>
               </div>
@@ -110,20 +132,22 @@ export default function BlogPage() {
                       height={250}
                     />
                   </Link>
-                  <div className="blog-category py-2 px-4">Investment</div>
+                  <div className="blog-category py-2 px-4">{isArabic ? 'استثمار' : 'Investment'}</div>
                   <div className="blog-date">
                     <i className="fas fa-clock me-2"></i>January 2025
                   </div>
                 </div>
                 <div className="blog-content p-4">
                   <Link href="/blog" className="h4 d-inline-block mb-4">
-                    Real Estate Investment Guide
+                    {isArabic ? 'دليل الاستثمار العقاري' : 'Real Estate Investment Guide'}
                   </Link>
                   <p className="mb-4">
-                    A comprehensive guide to real estate investment for beginners and experts...
+                    {isArabic
+                      ? 'دليل شامل للاستثمار العقاري للمبتدئين والمحترفين...'
+                      : 'A comprehensive guide to real estate investment for beginners and experts...'}
                   </p>
                   <Link href="/blog" className="btn btn-primary rounded-pill py-2 px-4">
-                    Read More <i className="fas fa-arrow-right ms-2"></i>
+                    {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fas fa-arrow-right ms-2"></i>
                   </Link>
                 </div>
               </div>

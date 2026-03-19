@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useTranslations } from '@/hooks/use-translations'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Pencil, Trash2, ChevronDown, ChevronUp, X, Plus, Calendar, Clock, Grid3x3, List, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Pencil, Trash2, ChevronDown, ChevronUp, X, Plus, Calendar, Clock, Grid3x3, List, ChevronLeft, ChevronRight, Mic, Square } from 'lucide-react'
 import { useAuthStore } from '@/store/auth-store'
 import { usePermissions } from '@/hooks/use-permissions'
 import {
@@ -129,6 +129,31 @@ interface DirectLeadActivity {
     name: string
     email: string
   }
+}
+
+type SpeechRecognitionLike = {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  maxAlternatives: number
+  onresult: ((event: any) => void) | null
+  onerror: ((event: any) => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+}
+
+function WhatsAppIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M19.11 17.59c-.27-.13-1.58-.78-1.83-.87-.24-.09-.42-.13-.6.13-.18.27-.69.87-.85 1.05-.16.18-.31.2-.58.07-.27-.13-1.13-.42-2.15-1.34-.8-.71-1.34-1.59-1.5-1.86-.16-.27-.02-.41.12-.54.12-.12.27-.31.4-.47.13-.16.18-.27.27-.45.09-.18.04-.34-.02-.47-.07-.13-.6-1.45-.82-1.99-.22-.53-.44-.46-.6-.47h-.51c-.18 0-.47.07-.71.34-.24.27-.94.92-.94 2.25 0 1.33.96 2.61 1.09 2.79.13.18 1.89 2.89 4.58 4.05.64.27 1.14.43 1.53.55.64.2 1.23.17 1.69.1.51-.08 1.58-.64 1.8-1.25.22-.61.22-1.13.16-1.25-.07-.12-.24-.2-.51-.33zM16.03 3.2c-7.07 0-12.79 5.72-12.79 12.79 0 2.25.59 4.46 1.7 6.4L3.2 28.8l6.56-1.72a12.73 12.73 0 0 0 6.27 1.61h.01c7.06 0 12.78-5.73 12.78-12.79 0-3.42-1.33-6.64-3.75-9.06A12.71 12.71 0 0 0 16.03 3.2zm0 23.35h-.01a10.6 10.6 0 0 1-5.39-1.47l-.39-.23-3.89 1.02 1.04-3.79-.25-.39a10.58 10.58 0 0 1-1.62-5.67c0-5.86 4.76-10.62 10.62-10.62 2.84 0 5.5 1.11 7.51 3.11a10.55 10.55 0 0 1 3.1 7.51c0 5.86-4.77 10.62-10.62 10.62z" />
+    </svg>
+  )
 }
 
 async function getDirectLeads(userId?: string | null, isSales?: boolean) {
@@ -451,9 +476,19 @@ export default function DirectLeadsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [leadToDelete, setLeadToDelete] = useState<DirectLead | null>(null)
+  const [whatsappDialogOpen, setWhatsappDialogOpen] = useState(false)
+  const [leadForWhatsapp, setLeadForWhatsapp] = useState<DirectLead | null>(null)
+  const [whatsappMessage, setWhatsappMessage] = useState('')
+  const [speechSupported, setSpeechSupported] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const [speechLangBadge, setSpeechLangBadge] = useState<'AR' | 'EN'>('EN')
+  const [speechError, setSpeechError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
   const [currentPage, setCurrentPage] = useState(1)
   const itemsPerPage = 20
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const speechBaseMessageRef = useRef('')
+  const speechFinalTranscriptRef = useRef('')
 
   // Check permissions
   const { canView, canCreate, canEdit, canDelete, isLoading: isCheckingPermissions } = usePermissions('direct_leads')
@@ -594,6 +629,211 @@ export default function DirectLeadsPage() {
   const onCreate = (data: DirectLeadCreateForm) => {
     createMutation.mutate(data)
   }
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const speechCtor =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition
+    setSpeechSupported(Boolean(speechCtor))
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop()
+    }
+  }, [])
+
+  const normalizeWhatsappNumber = useCallback((rawPhone: string) => {
+    const digitsOnly = String(rawPhone || '').replace(/\D/g, '')
+    if (!digitsOnly) return ''
+
+    // Convert local Egyptian numbers (e.g. 01xxxxxxxxx) to international format for wa.me.
+    if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
+      return `20${digitsOnly.slice(1)}`
+    }
+
+    // Strip international prefix 00 if present.
+    if (digitsOnly.startsWith('00')) {
+      return digitsOnly.slice(2)
+    }
+
+    return digitsOnly
+  }, [])
+
+  const openWhatsappDialogForLead = useCallback(
+    (lead: DirectLead) => {
+      const normalizedPhone = normalizeWhatsappNumber(lead.phone_number)
+      if (!normalizedPhone) {
+        toast({
+          title: t('common.error') || 'Error',
+          description: 'Lead phone number is missing or invalid for WhatsApp.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      setLeadForWhatsapp(lead)
+      setWhatsappMessage(`Hello ${lead.name || ''}, this is Algomhoria regarding your inquiry.`.trim())
+      setWhatsappDialogOpen(true)
+    },
+    [normalizeWhatsappNumber, t, toast]
+  )
+
+  const sendWhatsappMessage = useCallback(() => {
+    if (!leadForWhatsapp) return
+    const normalizedPhone = normalizeWhatsappNumber(leadForWhatsapp.phone_number)
+    if (!normalizedPhone) {
+      toast({
+        title: t('common.error') || 'Error',
+        description: 'Lead phone number is missing or invalid for WhatsApp.',
+        variant: 'destructive',
+      })
+      return
+    }
+    const encodedMessage = encodeURIComponent((whatsappMessage || '').trim())
+    const whatsappWebUrl = `https://wa.me/${normalizedPhone}${encodedMessage ? `?text=${encodedMessage}` : ''}`
+    const whatsappAppUrl = `whatsapp://send?phone=${normalizedPhone}${encodedMessage ? `&text=${encodedMessage}` : ''}`
+
+    const isMobileDevice =
+      typeof navigator !== 'undefined' &&
+      /Android|iPhone|iPad|iPod|Windows Phone/i.test(navigator.userAgent || '')
+
+    if (isMobileDevice) {
+      // Prefer native app on mobile, then fallback to web if app is unavailable.
+      window.location.href = whatsappAppUrl
+      window.setTimeout(() => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          window.location.href = whatsappWebUrl
+        }
+      }, 1200)
+    } else {
+      // Desktop/web behavior.
+      const popup = window.open(whatsappWebUrl, '_blank', 'noopener,noreferrer')
+      if (!popup) {
+        // Fallback if popup is blocked by browser policy.
+        window.location.href = whatsappWebUrl
+        return
+      }
+      popup.focus()
+    }
+
+    setWhatsappDialogOpen(false)
+    setLeadForWhatsapp(null)
+    setWhatsappMessage('')
+  }, [leadForWhatsapp, normalizeWhatsappNumber, t, toast, whatsappMessage])
+
+  const resolveSpeechLang = useCallback(() => {
+    if (typeof document !== 'undefined') {
+      const htmlLang = document.documentElement.lang || ''
+      if (htmlLang.toLowerCase().startsWith('ar')) return 'ar-EG'
+      if (htmlLang.toLowerCase().startsWith('en')) return 'en-US'
+    }
+    if (typeof navigator !== 'undefined') {
+      const browserLang = navigator.language || ''
+      if (browserLang.toLowerCase().startsWith('ar')) return 'ar-EG'
+      if (browserLang.toLowerCase().startsWith('en')) return 'en-US'
+    }
+    return 'en-US'
+  }, [])
+
+  const applyBestEffortPunctuation = useCallback((rawText: string, lang: string) => {
+    let text = String(rawText || '').trim()
+    if (!text) return ''
+
+    if (lang.toLowerCase().startsWith('ar')) {
+      text = text
+        .replace(/\b(فاصلة|،)\b/g, ',')
+        .replace(/\b(نقطة)\b/g, '.')
+        .replace(/\b(علامة استفهام|استفهام)\b/g, '?')
+        .replace(/\b(علامة تعجب|تعجب)\b/g, '!')
+        .replace(/\b(سطر جديد|سطر)\b/g, '\n')
+    } else {
+      text = text
+        .replace(/\b(comma)\b/gi, ',')
+        .replace(/\b(period|full stop|dot)\b/gi, '.')
+        .replace(/\b(question mark)\b/gi, '?')
+        .replace(/\b(exclamation mark)\b/gi, '!')
+        .replace(/\b(new line|newline)\b/gi, '\n')
+    }
+
+    // Cleanup punctuation spacing (best-effort).
+    text = text
+      .replace(/\s+([,?.!])/g, '$1')
+      .replace(/([,?.!])([^\s\n])/g, '$1 $2')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+
+    return text
+  }, [])
+
+  const toggleSpeechToText = useCallback(() => {
+    if (!speechSupported || typeof window === 'undefined') return
+    setSpeechError(null)
+
+    if (isListening) {
+      recognitionRef.current?.stop()
+      return
+    }
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition
+
+    if (!SpeechRecognitionCtor) {
+      setSpeechError('Speech recognition is not supported in this browser.')
+      return
+    }
+
+    const recognition: SpeechRecognitionLike = new SpeechRecognitionCtor()
+    const resolvedLang = resolveSpeechLang()
+    recognition.lang = resolvedLang
+    setSpeechLangBadge(resolvedLang.toLowerCase().startsWith('ar') ? 'AR' : 'EN')
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.maxAlternatives = 3
+
+    speechBaseMessageRef.current = whatsappMessage.trim()
+    speechFinalTranscriptRef.current = ''
+
+    recognition.onresult = (event: any) => {
+      let interimTranscript = ''
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const text = String(event.results[i]?.[0]?.transcript || '').trim()
+        if (!text) continue
+        if (event.results[i].isFinal) {
+          speechFinalTranscriptRef.current += `${text} `
+        } else {
+          interimTranscript += `${text} `
+        }
+      }
+      const spokenText = `${speechFinalTranscriptRef.current} ${interimTranscript}`.trim()
+      if (!spokenText) return
+      const normalizedText = applyBestEffortPunctuation(spokenText, recognition.lang)
+      const nextMessage = speechBaseMessageRef.current
+        ? `${speechBaseMessageRef.current} ${normalizedText}`.trim()
+        : normalizedText
+      setWhatsappMessage(nextMessage)
+    }
+
+    recognition.onerror = (event: any) => {
+      const code = String(event?.error || '')
+      if (code !== 'no-speech' && code !== 'aborted') {
+        setSpeechError('Could not capture voice clearly. Please try again.')
+      }
+    }
+
+    recognition.onend = () => {
+      setIsListening(false)
+      recognitionRef.current = null
+    }
+
+    recognitionRef.current = recognition
+    setIsListening(true)
+    recognition.start()
+  }, [applyBestEffortPunctuation, isListening, resolveSpeechLang, speechSupported, whatsappMessage])
 
   const handleToggleExpand = useCallback((lead: DirectLead, scrollTo = false) => {
     if (expandedRowId === lead.id) {
@@ -1223,6 +1463,15 @@ export default function DirectLeadsPage() {
                                 })}
                                 <TableCell className="sticky right-0 bg-background z-10">
                                   <div className="flex gap-1 sm:gap-2">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => openWhatsappDialogForLead(lead)}
+                                      className="h-8 w-8 text-emerald-600 hover:text-emerald-700 transition-all duration-200 hover:scale-110 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                      title="WhatsApp Lead"
+                                    >
+                                      <WhatsAppIcon />
+                                    </Button>
                                     {(canEdit || isSales) && (
                                       <Button
                                         variant="ghost"
@@ -1670,6 +1919,15 @@ export default function DirectLeadsPage() {
                                 )}
                               </div>
                               <div className="flex gap-1 self-end sm:self-auto">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => openWhatsappDialogForLead(lead)}
+                                  className="h-8 w-8 text-emerald-600 hover:text-emerald-700 transition-all duration-200 hover:scale-110 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                                  title="WhatsApp Lead"
+                                >
+                                  <WhatsAppIcon />
+                                </Button>
                                 {(canEdit || isSales) && (
                                   <Button
                                     variant="ghost"
@@ -1786,6 +2044,112 @@ export default function DirectLeadsPage() {
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? t('common.loading') || 'Deleting...' : t('common.delete') || 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={whatsappDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            recognitionRef.current?.stop()
+          }
+          setWhatsappDialogOpen(open)
+          if (!open) {
+            setLeadForWhatsapp(null)
+            setWhatsappMessage('')
+            setSpeechError(null)
+            setIsListening(false)
+            speechBaseMessageRef.current = ''
+            speechFinalTranscriptRef.current = ''
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                <WhatsAppIcon className="h-4 w-4" />
+              </span>
+              Send WhatsApp Message
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {leadForWhatsapp
+                ? `Write a message for ${leadForWhatsapp.name} and open WhatsApp chat.`
+                : 'Write your message and open WhatsApp chat.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="whatsapp-message">Message</Label>
+            <textarea
+              id="whatsapp-message"
+              value={whatsappMessage}
+              onChange={(event) => setWhatsappMessage(event.target.value)}
+              className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              placeholder="Type your WhatsApp message..."
+            />
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                type="button"
+                variant={isListening ? 'destructive' : 'outline'}
+                onClick={toggleSpeechToText}
+                disabled={!speechSupported}
+                className="w-full sm:w-auto"
+              >
+                {isListening ? (
+                  <>
+                    <Square className="h-4 w-4 mr-2" />
+                    Stop Voice Input
+                  </>
+                ) : (
+                  <>
+                    <Mic className="h-4 w-4 mr-2" />
+                    Speak to Type
+                  </>
+                )}
+              </Button>
+              {isListening && (
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                    Listening...
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-emerald-300/60 bg-white px-2 py-1 text-[10px] font-bold tracking-wide text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+                    {speechLangBadge}
+                  </span>
+                  <div className="flex items-end gap-1 h-6" aria-label="Voice wave animation">
+                    {[0, 1, 2, 3, 4].map((index) => (
+                      <span
+                        key={index}
+                        className="w-1 rounded-full bg-emerald-500 animate-pulse"
+                        style={{
+                          height: `${10 + ((index % 3) + 1) * 4}px`,
+                          animationDelay: `${index * 0.12}s`,
+                          animationDuration: '0.8s',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            {!speechSupported && (
+              <p className="text-xs text-muted-foreground">
+                Speech-to-text is not supported in this browser. Use Chrome or Edge.
+              </p>
+            )}
+            {speechError && <p className="text-xs text-destructive">{speechError}</p>}
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={sendWhatsappMessage}
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              Send via WhatsApp
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,23 +1,39 @@
+'use client'
+
 import Image from 'next/image'
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 export default function FeaturePage() {
+  const [locale, setLocale] = useState<'ar' | 'en'>('en')
+  useEffect(() => {
+    const nextLocale =
+      document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('locale='))
+        ?.split('=')[1] === 'ar'
+        ? 'ar'
+        : 'en'
+    setLocale(nextLocale)
+  }, [])
+  const isArabic = locale === 'ar'
+
   return (
     <>
       {/* Header Start */}
       <div className="container-fluid bg-breadcrumb">
         <div className="container text-center py-5" style={{ maxWidth: '900px' }}>
           <h4 className="text-white display-4 mb-4 wow fadeInDown" data-wow-delay="0.1s">
-            Our Features
+            {isArabic ? 'مميزاتنا' : 'Our Features'}
           </h4>
           <ol className="breadcrumb d-flex justify-content-center mb-0 wow fadeInDown" data-wow-delay="0.3s">
             <li className="breadcrumb-item">
-              <Link href="/">Home</Link>
+              <Link href="/">{isArabic ? 'الرئيسية' : 'Home'}</Link>
             </li>
             <li className="breadcrumb-item">
-              <Link href="#">Pages</Link>
+              <Link href="#">{isArabic ? 'الصفحات' : 'Pages'}</Link>
             </li>
-            <li className="breadcrumb-item active text-primary">Feature</li>
+            <li className="breadcrumb-item active text-primary">{isArabic ? 'المزايا' : 'Feature'}</li>
           </ol>
         </div>
       </div>
@@ -38,15 +54,17 @@ export default function FeaturePage() {
                 />
                 <div className="feature-content p-4">
                   <div className="feature-content-inner">
-                    <h4 className="text-white">Best Properties</h4>
+                    <h4 className="text-white">{isArabic ? 'افضل العقارات' : 'Best Properties'}</h4>
                     <p className="text-white">
-                      Find the best properties in prime locations across Egypt. From apartments to villas, we have it all.
+                      {isArabic
+                        ? 'اكتشف افضل العقارات في اميز المواقع داخل مصر من الشقق وحتى الفيلات.'
+                        : 'Find the best properties in prime locations across Egypt. From apartments to villas, we have it all.'}
                     </p>
                     <Link
                       href="/properties"
                       className="btn btn-primary rounded-pill py-2 px-4"
                     >
-                      Read More <i className="fa fa-arrow-right ms-1"></i>
+                      {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fa fa-arrow-right ms-1"></i>
                     </Link>
                   </div>
                 </div>
@@ -63,15 +81,17 @@ export default function FeaturePage() {
                 />
                 <div className="feature-content p-4">
                   <div className="feature-content-inner">
-                    <h4 className="text-white">Easy Search</h4>
+                    <h4 className="text-white">{isArabic ? 'بحث سهل' : 'Easy Search'}</h4>
                     <p className="text-white">
-                      Search by location, price, type, and more. Find exactly what you're looking for in seconds.
+                      {isArabic
+                        ? 'ابحث حسب الموقع والسعر والنوع والمزيد للوصول لما تبحث عنه بسرعة.'
+                        : "Search by location, price, type, and more. Find exactly what you're looking for in seconds."}
                     </p>
                     <Link
                       href="/properties"
                       className="btn btn-primary rounded-pill py-2 px-4"
                     >
-                      Read More <i className="fa fa-arrow-right ms-1"></i>
+                      {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fa fa-arrow-right ms-1"></i>
                     </Link>
                   </div>
                 </div>
@@ -88,15 +108,17 @@ export default function FeaturePage() {
                 />
                 <div className="feature-content p-4">
                   <div className="feature-content-inner">
-                    <h4 className="text-white">Trusted Service</h4>
+                    <h4 className="text-white">{isArabic ? 'خدمة موثوقة' : 'Trusted Service'}</h4>
                     <p className="text-white">
-                      Trusted by thousands of customers. Professional service and support throughout your journey.
+                      {isArabic
+                        ? 'يثق بنا الاف العملاء مع خدمة احترافية ودعم مستمر طوال رحلتك.'
+                        : 'Trusted by thousands of customers. Professional service and support throughout your journey.'}
                     </p>
                     <Link
                       href="/about"
                       className="btn btn-primary rounded-pill py-2 px-4"
                     >
-                      Read More <i className="fa fa-arrow-right ms-1"></i>
+                      {isArabic ? 'اقرأ المزيد' : 'Read More'} <i className="fa fa-arrow-right ms-1"></i>
                     </Link>
                   </div>
                 </div>

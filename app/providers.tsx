@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState, useEffect, useLayoutEffect, memo } from 'react'
 import dynamic from 'next/dynamic'
+import { usePathname } from 'next/navigation'
 import { useThemeStore } from '@/store/theme-store'
 import { useLanguageStore } from '@/store/language-store'
 
@@ -45,6 +46,14 @@ function ThemeInitializer() {
   return null
 }
 
+function ScrollToTopOnRouteChange() {
+  const pathname = usePathname()
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [pathname])
+  return null
+}
+
 // Memoized provider to prevent re-renders
 export const Providers = memo(function Providers({ children }: { children: React.ReactNode }) {
   const [mounted, setMounted] = useState(false)
@@ -57,6 +66,7 @@ export const Providers = memo(function Providers({ children }: { children: React
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeInitializer />
+      <ScrollToTopOnRouteChange />
       <div style={{ visibility: mounted ? 'visible' : 'hidden' }}>
         {children}
       </div>

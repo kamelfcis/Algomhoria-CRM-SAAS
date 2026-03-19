@@ -1027,6 +1027,60 @@ export default function ProjectsPage() {
       ),
     },
     {
+      key: 'project_categories',
+      header: t('projects.category') || 'Category',
+      render: (_: any, row: any) => {
+        const categoryAr = row.project_categories?.title_ar || '-'
+        const categoryEn = row.project_categories?.title_en || '-'
+        return (
+          <div>
+            <div className="font-medium">{categoryAr}</div>
+            <div className="text-xs text-muted-foreground">{categoryEn}</div>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'location',
+      header: t('projects.location') || 'Location',
+      render: (_: any, row: any) => {
+        const gov = row.governorates?.name_en || row.governorates?.name_ar || ''
+        const area = row.areas?.name_en || row.areas?.name_ar || ''
+        const locationText = row.location_text || [gov, area].filter(Boolean).join(' - ')
+        return <span>{locationText || '-'}</span>
+      },
+    },
+    {
+      key: 'specs',
+      header: t('projects.specs') || 'Specs',
+      render: (_: any, row: any) => {
+        const metadata =
+          typeof row.metadata === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(row.metadata)
+                } catch {
+                  return null
+                }
+              })()
+            : row.metadata
+
+        const facilities = Array.isArray(metadata?.facilities) ? metadata.facilities.length : 0
+        const services = Array.isArray(metadata?.services) ? metadata.services.length : 0
+        const units = Array.isArray(metadata?.units) ? metadata.units.length : 0
+        const type = row.project_type || '-'
+
+        return (
+          <div className="text-xs leading-5">
+            <div><strong>Type:</strong> {type}</div>
+            <div><strong>Units:</strong> {units}</div>
+            <div><strong>Facilities:</strong> {facilities}</div>
+            <div><strong>Services:</strong> {services}</div>
+          </div>
+        )
+      },
+    },
+    {
       key: 'status',
       header: t('projects.status') || 'Status',
       render: (value: string) => (

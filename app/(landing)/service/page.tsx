@@ -1,22 +1,38 @@
+'use client'
+
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 export default function ServicePage() {
+  const [locale, setLocale] = useState<'ar' | 'en'>('en')
+  useEffect(() => {
+    const nextLocale =
+      document.cookie
+        .split('; ')
+        .find((row) => row.startsWith('locale='))
+        ?.split('=')[1] === 'ar'
+        ? 'ar'
+        : 'en'
+    setLocale(nextLocale)
+  }, [])
+  const isArabic = locale === 'ar'
+
   return (
     <>
       {/* Header Start */}
       <div className="container-fluid bg-breadcrumb">
         <div className="container text-center py-5" style={{ maxWidth: '900px' }}>
           <h4 className="text-white display-4 mb-4 wow fadeInDown" data-wow-delay="0.1s">
-            Our Services
+            {isArabic ? 'خدماتنا' : 'Our Services'}
           </h4>
           <ol className="breadcrumb d-flex justify-content-center mb-0 wow fadeInDown" data-wow-delay="0.3s">
             <li className="breadcrumb-item">
-              <Link href="/">Home</Link>
+              <Link href="/">{isArabic ? 'الرئيسية' : 'Home'}</Link>
             </li>
             <li className="breadcrumb-item">
-              <Link href="#">Pages</Link>
+              <Link href="#">{isArabic ? 'الصفحات' : 'Pages'}</Link>
             </li>
-            <li className="breadcrumb-item active text-primary">Service</li>
+            <li className="breadcrumb-item active text-primary">{isArabic ? 'الخدمات' : 'Service'}</li>
           </ol>
         </div>
       </div>
@@ -30,12 +46,14 @@ export default function ServicePage() {
             data-wow-delay="0.2s"
             style={{ maxWidth: '800px' }}
           >
-            <h4 className="text-primary">Our Service</h4>
+            <h4 className="text-primary">{isArabic ? 'خدماتنا' : 'Our Service'}</h4>
             <h1 className="display-5 text-white mb-4">
-              Explore Algomhoria Services
+              {isArabic ? 'اكتشف خدمات الجمهورية' : 'Explore Algomhoria Services'}
             </h1>
             <p className="mb-0 text-white">
-              We offer comprehensive real estate services to help you find your perfect property or list your property for free.
+              {isArabic
+                ? 'نقدم خدمات عقارية متكاملة لمساعدتك في العثور على العقار المناسب او عرض عقارك مجانا.'
+                : 'We offer comprehensive real estate services to help you find your perfect property or list your property for free.'}
             </p>
           </div>
           <div className="row g-4">
@@ -46,10 +64,12 @@ export default function ServicePage() {
                     <i className="fas fa-home fa-4x"></i>
                   </div>
                   <Link href="/properties" className="h4 d-inline-block mb-3">
-                    Property Search
+                    {isArabic ? 'البحث عن عقار' : 'Property Search'}
                   </Link>
                   <p className="mb-0">
-                    Search through thousands of properties for sale and rent across Egypt.
+                    {isArabic
+                      ? 'ابحث ضمن الاف العقارات للبيع والايجار في جميع محافظات مصر.'
+                      : 'Search through thousands of properties for sale and rent across Egypt.'}
                   </p>
                 </div>
               </div>
@@ -61,10 +81,12 @@ export default function ServicePage() {
                     <i className="fas fa-plus-circle fa-4x"></i>
                   </div>
                   <Link href="/properties" className="h4 d-inline-block mb-3">
-                    Free Listing
+                    {isArabic ? 'اعلان مجاني' : 'Free Listing'}
                   </Link>
                   <p className="mb-0">
-                    List your property for free and reach thousands of potential buyers.
+                    {isArabic
+                      ? 'اعرض عقارك مجانا ووصل الى الاف المشترين المحتملين.'
+                      : 'List your property for free and reach thousands of potential buyers.'}
                   </p>
                 </div>
               </div>
@@ -76,10 +98,12 @@ export default function ServicePage() {
                     <i className="fas fa-calendar-check fa-4x"></i>
                   </div>
                   <Link href="/bookings" className="h4 d-inline-block mb-3">
-                    Property Viewing
+                    {isArabic ? 'معاينة العقار' : 'Property Viewing'}
                   </Link>
                   <p className="mb-0">
-                    Schedule property viewings and consultations with our team.
+                    {isArabic
+                      ? 'احجز مواعيد المعاينة والاستشارات مع فريقنا.'
+                      : 'Schedule property viewings and consultations with our team.'}
                   </p>
                 </div>
               </div>
@@ -91,10 +115,12 @@ export default function ServicePage() {
                     <i className="fas fa-headset fa-4x"></i>
                   </div>
                   <Link href="/contact" className="h4 d-inline-block mb-3">
-                    Expert Support
+                    {isArabic ? 'دعم احترافي' : 'Expert Support'}
                   </Link>
                   <p className="mb-0">
-                    Get expert advice and support throughout your property journey.
+                    {isArabic
+                      ? 'احصل على نصائح ودعم متخصص طوال رحلتك العقارية.'
+                      : 'Get expert advice and support throughout your property journey.'}
                   </p>
                 </div>
               </div>

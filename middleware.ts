@@ -2,6 +2,18 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
+  const isAdminRoute = pathname.startsWith('/admin')
+  const isAuthLoginRoute = pathname.startsWith('/auth/login')
+
+  if (!isAdminRoute && !isAuthLoginRoute) {
+    return NextResponse.next({
+      request: {
+        headers: request.headers,
+      },
+    })
+  }
+
   let response = NextResponse.next({
     request: {
       headers: request.headers,
@@ -59,14 +71,14 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   // Protect admin routes
-  if (request.nextUrl.pathname.startsWith('/admin')) {
+  if (isAdminRoute) {
     if (!user) {
       return NextResponse.redirect(new URL('/auth/login', request.url))
     }
   }
 
   // Redirect authenticated users away from login
-  if (request.nextUrl.pathname.startsWith('/auth/login')) {
+  if (isAuthLoginRoute) {
     if (user) {
       return NextResponse.redirect(new URL('/admin', request.url))
     }
@@ -77,14 +89,8 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder
-     */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/admin/:path*',
+    '/auth/login',
   ],
 }
 
