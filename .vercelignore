@@ -1,9 +1,12 @@
 .next
+lib/.next
 node_modules
 .git
 .cursor
 supabase/.temp
 supabase/supabase/.temp
+*.rar
+**/*.rar
 *.log
 coverage
 tmp
