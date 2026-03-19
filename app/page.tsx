@@ -1,12 +1,12 @@
 'use client'
 
-import LandingPage from './(landing)/page'
 import LandingLayout from './(landing)/layout'
+import HomePageClient from '@/components/landing/HomePageClient'
 
 export default function RootPage() {
   return (
     <LandingLayout>
-      <LandingPage />
+      <HomePageClient />
     </LandingLayout>
   )
 }

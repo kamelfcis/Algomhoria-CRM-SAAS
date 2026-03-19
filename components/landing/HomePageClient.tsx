@@ -146,7 +146,7 @@ function getDictionary(locale: 'ar' | 'en') {
   }
 }
 
-export default function HomePage() {
+export default function HomePageClient() {
   const [locale, setLocale] = useState<'ar' | 'en'>('en')
   const [data, setData] = useState<LandingData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -233,8 +233,6 @@ export default function HomePage() {
     .filter((property) => !property.is_featured)
     .slice(0, 6)
   const posts = data?.posts || []
-  const truncate = (value: string, max = 220) =>
-    value.length > max ? `${value.slice(0, max).trim()}...` : value
   const cardImageStyle: React.CSSProperties = {
     height: '240px',
     width: '100%',
@@ -254,13 +252,6 @@ export default function HomePage() {
     overflow: 'hidden',
     minHeight: '48px',
   }
-  const textClampStyle: React.CSSProperties = {
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-    minHeight: '42px',
-  }
 
   const effectiveSlides = sliders
 
@@ -278,21 +269,21 @@ export default function HomePage() {
           <img src="/logo.png" alt="Algomhoria Logo" className="hero-slider-logo" />
         </div>
         <div className="header-carousel-item">
-            {!showHeroSkeleton && activeSlide ? (
-              <SafeImage
-                src={activeSlide.image_url}
-                className="img-fluid w-100"
-                alt={activeSlide.title || text.homeTitle}
-                width={1920}
-                height={1080}
-                fallbackSrc="/landing/img/feature-1.jpg"
-                loading="eager"
-                fetchPriority="high"
-              />
-            ) : (
-              <div className="hero-slider-loading-surface"></div>
-            )}
-            <div className="carousel-caption"></div>
+          {!showHeroSkeleton && activeSlide ? (
+            <SafeImage
+              src={activeSlide.image_url}
+              className="img-fluid w-100"
+              alt={activeSlide.title || text.homeTitle}
+              width={1920}
+              height={1080}
+              fallbackSrc="/landing/img/feature-1.jpg"
+              loading="eager"
+              fetchPriority="high"
+            />
+          ) : (
+            <div className="hero-slider-loading-surface"></div>
+          )}
+          <div className="carousel-caption"></div>
         </div>
         {effectiveSlides.length > 1 && (
           <>
@@ -436,7 +427,7 @@ export default function HomePage() {
                       />
                       <div className="blog-category py-2 px-4">{post.category}</div>
                     </div>
-                    <div className="blog-content p-4" style={cardBodyStyle}>
+                    <div className="blog-content p-4" style={{ ...cardBodyStyle }}>
                       <h5 className="mb-2" style={titleClampStyle}>{post.title}</h5>
                       {post.published_at && (
                         <p className="text-muted mb-0">
@@ -454,4 +445,3 @@ export default function HomePage() {
     </>
   )
 }
-
