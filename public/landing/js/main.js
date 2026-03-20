@@ -12,8 +12,10 @@
     spinner(0);
     
     
-    // Initiate the wowjs
-    new WOW().init();
+    // Initiate wowjs only when library is loaded
+    if (typeof WOW !== 'undefined') {
+        new WOW().init();
+    }
 
 
     // Sticky Navbar

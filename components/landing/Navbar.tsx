@@ -74,6 +74,30 @@ export function Navbar({
   }, [])
 
   useEffect(() => {
+    if (isDesktop) return
+    const previousOverflow = document.body.style.overflow
+    if (isMobileMenuOpen) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = previousOverflow || ''
+    }
+    return () => {
+      document.body.style.overflow = previousOverflow || ''
+    }
+  }, [isDesktop, isMobileMenuOpen])
+
+  useEffect(() => {
+    if (!isMobileMenuOpen) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsMobileMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [isMobileMenuOpen])
+
+  useEffect(() => {
     setLocale(getLocaleFromCookie())
   }, [])
 
@@ -458,6 +482,8 @@ export function Navbar({
           type="button"
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
           aria-label="Toggle navigation"
+          aria-expanded={isMobileMenuOpen}
+          aria-controls="navbarCollapse"
           style={{
             border: '1px solid var(--bs-primary, #0d6efd)',
             padding: '8px 15px',
@@ -473,9 +499,9 @@ export function Navbar({
         {/* Navigation Menu - Always visible on desktop, toggleable on mobile */}
         <div 
           id="navbarCollapse"
-          className="landing-nav-collapse"
+          className={`landing-nav-collapse ${!isDesktop ? 'is-mobile-drawer' : ''} ${!isDesktop && isMobileMenuOpen ? 'is-open' : ''}`}
           style={{
-            display: isDesktop || isMobileMenuOpen ? 'flex' : 'none',
+            display: 'flex',
             flexDirection: 'column',
             flexGrow: 1,
             alignItems: 'stretch',
@@ -1067,6 +1093,14 @@ export function Navbar({
         </div>
       </nav>
     </div>
+    {!isDesktop && (
+      <button
+        type="button"
+        aria-label={isArabic ? 'إغلاق القائمة' : 'Close menu'}
+        className={`landing-mobile-drawer-overlay ${isMobileMenuOpen ? 'show' : ''}`}
+        onClick={() => setIsMobileMenuOpen(false)}
+      />
+    )}
     </>
   )
 }
