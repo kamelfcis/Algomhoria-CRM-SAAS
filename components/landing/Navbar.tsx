@@ -513,6 +513,22 @@ export function Navbar({
             padding: isDesktop ? '2px 0 0' : '20px 0'
           }}
         >
+          {!isDesktop && (
+            <div className="landing-mobile-drawer-header">
+              <div className="landing-mobile-drawer-title">
+                <img src="/logo.png" alt="Algomhoria Logo" />
+                <span>{isArabic ? 'القائمة' : 'Menu'}</span>
+              </div>
+              <button
+                type="button"
+                className="landing-mobile-drawer-close"
+                onClick={() => setIsMobileMenuOpen(false)}
+                aria-label={isArabic ? 'إغلاق القائمة' : 'Close menu'}
+              >
+                <i className="fas fa-times" aria-hidden="true"></i>
+              </button>
+            </div>
+          )}
           <div className="landing-nav-main-row">
             {/* Navigation Links */}
             <div 
